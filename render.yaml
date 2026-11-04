@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: apple-worm-adventure-api
+    runtime: node
+    rootDir: .
+    buildCommand: npm --prefix backend ci
+    startCommand: npm --prefix backend start
+    healthCheckPath: /api/health/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REWARDED_AD_PROVIDER
+        value: unconfigured
+      - key: JWT_EXPIRES_IN
+        value: 1h
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
