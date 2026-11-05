@@ -8,7 +8,10 @@ export const api = {
   login(credentials) {
     return request("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify(credentials),
+      body: JSON.stringify({
+        email: credentials.email,
+        password: credentials.password,
+      }),
     });
   },
 
