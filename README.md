@@ -1,8 +1,13 @@
 # Apple Worm Adventure
 
-A full-stack grid puzzle game in the Apple Worm style. Collect apples, grow the worm, avoid obstacles, and reach the portal. The project includes accounts, server-validated game progress, leaderboard, achievements, a virtual coin wallet, a rewarded-ad verification seam, and admin reward configuration.
+Apple Worm Adventure is a full-stack grid puzzle game. Guide a growing worm through orchard boards, collect every apple, avoid hazards, and reach the portal. Registered players can save game progress and view their account statistics.
 
-> **Deployment status:** This repository contains deployment configuration and instructions, but the application is not deployed by this change. Do not treat deployment as complete until the deployed URLs pass the checklist in [DEPLOYMENT_CHECKLIST.md](./docs/DEPLOYMENT_CHECKLIST.md).
+## Project URLs
+
+- Frontend: [https://apple-worm-adventure-frontend.onrender.com](https://apple-worm-adventure-frontend.onrender.com/)
+- Backend API: [https://apple-worm-adventure-api.onrender.com](https://apple-worm-adventure-api.onrender.com/)
+
+These are the project URLs supplied for this documentation. Their availability and live behavior were not checked as part of the local test runs below.
 
 ## Features
 
@@ -15,72 +20,60 @@ A full-stack grid puzzle game in the Apple Worm style. Collect apples, grow the 
 - Admin-only dashboard and audited reward configuration updates.
 - Responsive React screens with loading, empty, and error states.
 
-## Tech stack
+## Technologies
 
-- Frontend: React 18, Vite 6, CSS.
-- Backend: Node.js 20+, Express 4, Zod request validation.
-- Persistence: MongoDB Atlas or another MongoDB replica set, Mongoose 8.
-- Security: JWT, bcryptjs, server-side role checks, strict request validation.
-- Browser sessions: HttpOnly cookies, credentialed API requests, state-changing request Origin validation, and server-side logout revocation.
-- Hosting configuration: Netlify static frontend, Render Node.js API, MongoDB Atlas persistent database.
+- Frontend: React 18, Vite 6, JavaScript, and CSS.
+- Backend: Node.js 20+, Express 4, and Zod request validation.
+- Database: MongoDB with Mongoose 8; transaction-dependent features require a replica set or MongoDB Atlas.
+- Authentication/security: bcryptjs password hashing, signed JWT sessions in HttpOnly cookies, authorization checks, strict request validation, CORS, and Origin validation for state-changing requests.
+- Browser testing: Playwright.
+- Deployment configuration: Render service configuration in `render.yaml`.
 
-## Project layout
+## Architecture and project layout
 
 ```text
-frontend/   React + Vite app, browser game and UI
-backend/    Express API, authentication, services, routes, and Mongoose models
-shared/     Canonical level definitions and game rules used by frontend and backend
-docs/       End-user guide and deployment checklist
-netlify.toml
-render.yaml
+frontend/
+  src/App.jsx             SPA navigation, authentication, saved game state
+  src/pages/              Game, account, dashboard, wallet, and data screens
+  src/services/api.js     Frontend HTTP API client
+  e2e/                    Playwright browser tests
+backend/
+  src/app.js              Express middleware and route registration
+  src/routes/             API route definitions and validation
+  src/controllers/        HTTP request/response handlers
+  src/services/           Authentication, gameplay, wallet, rewards, and stats
+  src/models/             Mongoose persistence models
+shared/                   Canonical level definitions and game rules
+docs/                     User guide, deployment checklist, MongoDB test setup
+render.yaml               Render backend service configuration
 ```
+
+The React/Vite frontend calls the Express API. The API validates requests, authenticates the player, and delegates game and account operations to services backed by Mongoose models. Canonical level boards and game rules are shared so the server can replay submitted moves and calculate results rather than trusting client-provided scores.
 
 ## Local setup
 
-Install Node.js 20+ (Node 22 is selected by `.node-version`) and npm. From the project root:
+Install Node.js 20+ and npm. From the project root, install dependencies and copy the environment templates:
 
 ```powershell
-Set-Location 'D:\Intership task\VELoop Rewards\Apple-Worm-Adventure\backend'
-npm ci
-Copy-Item .env.example .env
+npm ci --prefix backend
+npm ci --prefix frontend
+Copy-Item backend\.env.example backend\.env
+Copy-Item frontend\.env.example frontend\.env
 ```
 
-Edit `backend\.env` for local development:
+Configure `backend\.env` for local development: set `NODE_ENV` to development, `FRONTEND_ORIGIN` to your local frontend origin, `MONGODB_URI` to your development MongoDB instance, and `JWT_SECRET` to a private random value of at least 32 characters. Keep `.env` files out of version control. Transaction-backed wallet and reward operations require a MongoDB replica set.
 
-- Set `NODE_ENV=development`.
-- Set `FRONTEND_ORIGIN=http://localhost:5173`.
-- Set `MONGODB_URI` to a reachable MongoDB instance.
-- Set a unique `JWT_SECRET` of at least 32 characters. Generate one with:
+In `frontend\.env`, set `VITE_API_BASE_URL` to the local backend origin. Start the API and frontend in separate terminals from the project root:
 
 ```powershell
-node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
-```
-
-- For local simulation only, set `REWARDED_AD_PROVIDER=development_simulation`. It is not a real ad. Set it to `unconfigured` to disable reward claims.
-
-In another terminal:
-
-```powershell
-Set-Location 'D:\Intership task\VELoop Rewards\Apple-Worm-Adventure\frontend'
-npm ci
-Copy-Item .env.example .env
-```
-
-Edit `frontend\.env` and set `VITE_API_BASE_URL=http://localhost:5000`.
-
-Run the API and frontend in separate terminals:
-
-```powershell
-Set-Location 'D:\Intership task\VELoop Rewards\Apple-Worm-Adventure\backend'
-npm run dev
+npm --prefix backend run dev
 ```
 
 ```powershell
-Set-Location 'D:\Intership task\VELoop Rewards\Apple-Worm-Adventure\frontend'
-npm run dev
+npm --prefix frontend run dev
 ```
 
-Open <http://localhost:5173>. API readiness is at <http://localhost:5000/api/health/ready>.
+The frontend is served at <http://localhost:5173>; API readiness is at <http://localhost:5000/api/health/ready>. The optional development reward simulation is not an advertisement; use `unconfigured` to keep reward claims unavailable.
 
 ### Environment variables
 
@@ -97,8 +90,9 @@ Both committed `.env.example` files contain placeholders, not usable credentials
 | `REWARDED_AD_PROVIDER` | API | `unconfigured` in production. The development simulation is local-only and not a real ad. |
 | `REWARD_SIMULATION_MIN_WATCH_SECONDS` | API | Development simulation wait duration, integer 1–300. |
 | `VITE_API_BASE_URL` | Frontend build | HTTPS API origin embedded at build time. Frontend production build fails if it is missing, HTTP, or still the example placeholder. It is an origin, not a secret. |
+| `MONGODB_TEST_URI` | Backend tests only | Optional isolated loopback MongoDB replica-set URI. It must use a database named `apple_worm_adventure_test_<suffix>` and is never an application fallback. |
 
-`backend/.env.example` illustrates production-shaped values; replace its host/user/password/secret placeholders. For local setup, explicitly use development values as described above.
+The environment templates contain placeholders only. Keep real credentials in local environment files or hosting secret settings; never commit them.
 
 ## API overview
 
@@ -106,13 +100,13 @@ All API routes are prefixed with `/api`. Protected routes require `Authorization
 
 | Area | Routes |
 |---|---|
-| Health | `GET /health/live`, `GET /health/ready`, `GET /health` |
-| Authentication | `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `PATCH /auth/me`, `POST /auth/logout` |
-| Player | `GET /player/progress`, `GET /player/dashboard`, `GET /player/history`, `POST /player/sessions`, `PUT /player/sessions/:sessionId/actions`, `GET /player/leaderboard` |
-| Achievements | `GET /achievements` |
-| Wallet | `GET /wallet/balance`, `GET /wallet/transactions`, `POST /wallet/hints` |
-| Rewards | `GET /rewards/configuration`, `POST /rewards/sessions`, `POST /rewards/sessions/:sessionId/verify`, `GET /rewards/history` |
-| Admin only | `GET /admin/dashboard`, `GET /admin/reward-configurations`, `PATCH /admin/reward-configurations/:rewardType` |
+| Health | `GET /api/health/live`, `GET /api/health/ready`, `GET /api/health` |
+| Authentication/profile | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `PATCH /api/auth/me`, `POST /api/auth/logout` |
+| Player/game | `GET /api/player/progress`, `GET /api/player/dashboard`, `GET /api/player/history`, `POST /api/player/sessions`, `PUT /api/player/sessions/:sessionId/actions`, `GET /api/player/leaderboard` |
+| Achievements | `GET /api/achievements` |
+| Wallet | `GET /api/wallet/balance`, `GET /api/wallet/transactions`, `POST /api/wallet/hints` |
+| Rewards | `GET /api/rewards/configuration`, `POST /api/rewards/sessions`, `POST /api/rewards/sessions/:sessionId/verify`, `GET /api/rewards/history` |
+| Admin only | `GET /api/admin/dashboard`, `GET /api/admin/reward-configurations`, `PATCH /api/admin/reward-configurations/:rewardType` |
 
 The readiness endpoint returns 503 until MongoDB is connected; liveness remains 200 while the API process is responsive. The existing `/health` endpoint has the same database-aware readiness behavior.
 
@@ -131,34 +125,25 @@ npm --prefix backend test
 ```powershell
 npm --prefix frontend exec -- playwright install chromium
 npm --prefix frontend test
-$env:VITE_API_BASE_URL = 'https://api.example.org'
+$env:VITE_API_BASE_URL = 'https://apple-worm-adventure-api.onrender.com'
 npm --prefix frontend run build
 Remove-Item Env:VITE_API_BASE_URL
 ```
 
-MongoDB integration tests require a separately configured `MONGODB_TEST_URI`; they never fall back to `MONGODB_URI`. See the exact isolated replica-set setup and safety checks in [testing documentation](./docs/TESTING.md). The frontend E2E suite mocks the API and does not prove live backend behavior. The frontend build example validates configuration only; use the actual API URL for a deployment.
+See [TESTING.md](./TESTING.md) for test commands, actual results, coverage boundaries, and the isolated MongoDB setup. MongoDB integration tests require a separately configured `MONGODB_TEST_URI`; they never fall back to `MONGODB_URI`. Browser E2E tests use a mocked API and do not establish live backend persistence.
 
 ## Deployment
 
-The project is prepared for this deployment path:
+The deployment URLs listed above are supplied for this project. The repository's [render.yaml](./render.yaml) configures the Node.js backend service and health check; deployment settings such as the database URI, JWT secret, and allowed frontend origin are provided through the hosting environment. Configure `VITE_API_BASE_URL` to the backend HTTPS origin when building the frontend and `FRONTEND_ORIGIN` to the frontend HTTPS origin in the backend environment. See [DEPLOYMENT_CHECKLIST.md](./docs/DEPLOYMENT_CHECKLIST.md) for deployment verification steps.
 
-1. **MongoDB Atlas** — create a persistent cluster/database, application user, backups, and restricted network access. Obtain the SRV URI.
-2. **Choose the Netlify site URL** — create the Netlify site from this repository and select its site name or configure its custom domain. Record its exact HTTPS origin (scheme and host only); this value is needed by the backend CORS setting.
-3. **Render backend** — deploy the repository's `render.yaml` Blueprint. It builds with `npm --prefix backend ci`, starts with `npm --prefix backend start`, and checks `/api/health/ready`. Set the prompted `FRONTEND_ORIGIN` to the final Netlify origin, `MONGODB_URI` to the private Atlas SRV URI, and `JWT_SECRET` to a new randomly generated secret. The Blueprint sets `NODE_ENV=production` and `REWARDED_AD_PROVIDER=unconfigured`. Production startup stops if MongoDB is unreachable.
-4. **Netlify frontend** — configure `VITE_API_BASE_URL` to the HTTPS origin of the deployed Render API (scheme and host only), then deploy. `netlify.toml` selects `frontend` as the base directory, `npm ci && npm run build`, `dist` as the publish directory, and an SPA route fallback. The API URL is embedded at build time.
-5. Confirm Render's `FRONTEND_ORIGIN` exactly matches the deployed Netlify/custom-domain origin, including scheme, with no path or trailing slash. Redeploy/restart Render after changing it.
-6. Test the actual deployed URLs, CORS, registration, login, persistence, and role access using [DEPLOYMENT_CHECKLIST.md](./docs/DEPLOYMENT_CHECKLIST.md). Deployment is not complete until these checks pass against your real URLs.
-
-Exact provider setup, environment values, verification checks, and known limitations are in the [deployment checklist](./docs/DEPLOYMENT_CHECKLIST.md). Player instructions are in the [user guide](./docs/USER_GUIDE.md).
-
-Production sessions use a Secure, HttpOnly cookie; frontend JavaScript cannot read or persist the JWT. Logout revokes issued sessions. The cookie expires with its JWT (one hour by default), and there is no refresh-token flow, so players must sign in again after expiry. Default Netlify and Render hostnames are cross-site, and browser third-party-cookie restrictions may block sessions. For broader compatibility, use HTTPS custom domains under the same site (for example, `game.example.com` and `api.example.com`) and test in supported browsers.
+Production sessions use Secure, HttpOnly cookies and logout revokes issued sessions. Cookies expire with the configured JWT lifetime (one hour by default); there is no refresh-token flow. Browser cookie restrictions can affect sessions when frontend and backend are on different sites. The URLs' availability, deployed API behavior, and hosted persistence were not checked in the local test runs.
 
 ## Known limitations
 
-- No live deployment is claimed until the hosted URLs have actually been tested.
+- The project URLs are listed as supplied, but their live availability and behavior were not verified in this test run.
 - There is no real ad SDK or server-side ad-provider verification. Production rewards are disabled; the local simulation is not an ad.
 - Rewarded revive, double score, extra moves, and boosters are not implemented and are disabled. Rewarded hints and bonus coins are supported only in the explicitly labeled development simulation until a real provider is configured. The separate 5-coin gameplay hint is available independently.
-- Sessions expire after the configured JWT lifetime (one hour by default); there is no refresh-token flow. Browser support for cross-site cookies on the default Netlify/Render hostnames varies; same-site custom domains are recommended.
+- Sessions expire after the configured JWT lifetime (one hour by default); there is no refresh-token flow. Browser support for cross-site cookies varies; test the deployed origins in target browsers.
 - Transaction-dependent features require MongoDB replica-set/Atlas support.
 - Automated browser E2E and opt-in MongoDB-backed integration suites are available; hosted-service and production browser tests remain unverified.
 - No production rewarded-ad provider SDK/adapter or provider credentials are configured. Production reward claims stay disabled. Integrating a provider requires a provider-specific client SDK/placement, a `RewardProviderAdapter` implementation that verifies signed server callbacks or provider receipts, private credentials in host environment variables, and end-to-end verification before enabling rewards. The development simulation is not an advertisement.

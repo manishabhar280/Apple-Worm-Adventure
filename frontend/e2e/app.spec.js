@@ -203,6 +203,32 @@ test("registers, plays, saves, reloads, and resumes an authenticated game", asyn
   await expect(page.locator(".game-status-label")).toHaveText("playing");
 });
 
+test("logs out and logs in again with only email and password", async ({ page }) => {
+  const state = createApiState();
+  await mockApi(page, state);
+  let loginPayload;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/auth/login") {
+      loginPayload = request.postDataJSON();
+    }
+  });
+
+  await registerPlayer(page);
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page).toHaveURL("/");
+  await page.getByRole("button", { name: "Log in", exact: true }).click();
+  await page.getByLabel("Email address").fill("apple@example.test");
+  await page.getByLabel("Password").fill("integration-password");
+  await page.getByRole("button", { name: "Log in", exact: true }).last().click();
+
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "Hello, Apple!" })).toBeVisible();
+  expect(loginPayload).toEqual({
+    email: "apple@example.test",
+    password: "integration-password",
+  });
+});
+
 test("wallet and leaderboard navigation works at desktop and mobile widths", async ({ page }) => {
   const state = createApiState();
   await mockApi(page, state);
@@ -218,11 +244,16 @@ test("wallet and leaderboard navigation works at desktop and mobile widths", asy
   await page.getByRole("button", { name: "Leaderboard", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
 
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Wallet", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Wallet" })).toBeVisible();
-  const viewportHasNoHorizontalOverflow = await page.evaluate(
-    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-  );
-  expect(viewportHasNoHorizontalOverflow).toBe(true);
+  for (const viewport of [
+    { name: "iPhone 16", width: 393, height: 852 },
+    { name: "iPhone 16 Pro Max", width: 440, height: 956 },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.getByRole("button", { name: "Wallet", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Wallet" })).toBeVisible();
+    const viewportHasNoHorizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    );
+    expect(viewportHasNoHorizontalOverflow, `${viewport.name} should not overflow horizontally`).toBe(true);
+  }
 });
