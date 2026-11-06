@@ -44,15 +44,18 @@ test("liveness stays healthy while readiness waits for MongoDB", async () => {
   }
 });
 
-test("CORS exposes API responses only to the configured frontend origin", async () => {
+test("CORS exposes API responses only to the configured frontend and Capacitor origins", async () => {
   const originalOrigin = process.env.FRONTEND_ORIGIN;
   process.env.FRONTEND_ORIGIN = "https://game.example.test";
   const server = app.listen(0);
   try {
     const address = server.address();
-    const [allowedResponse, deniedResponse] = await Promise.all([
+    const [allowedResponse, capacitorResponse, deniedResponse] = await Promise.all([
       fetch(`http://127.0.0.1:${address.port}/api/health/live`, {
         headers: { Origin: "https://game.example.test" },
+      }),
+      fetch(`http://127.0.0.1:${address.port}/api/health/live`, {
+        headers: { Origin: "https://localhost" },
       }),
       fetch(`http://127.0.0.1:${address.port}/api/health/live`, {
         headers: { Origin: "https://other.example.test" },
@@ -60,6 +63,8 @@ test("CORS exposes API responses only to the configured frontend origin", async 
     ]);
     assert.equal(allowedResponse.headers.get("access-control-allow-origin"), "https://game.example.test");
     assert.equal(allowedResponse.headers.get("access-control-allow-credentials"), "true");
+    assert.equal(capacitorResponse.headers.get("access-control-allow-origin"), "https://localhost");
+    assert.equal(capacitorResponse.headers.get("access-control-allow-credentials"), "true");
     assert.equal(deniedResponse.headers.get("access-control-allow-origin"), null);
   } finally {
     if (originalOrigin === undefined) delete process.env.FRONTEND_ORIGIN;

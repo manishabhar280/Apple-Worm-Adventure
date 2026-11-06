@@ -17,9 +17,11 @@ app.use(
   cors({
     credentials: true,
     origin(origin, callback) {
-      const allowedOrigin =
-        process.env.FRONTEND_ORIGIN || "http://localhost:5173";
-      callback(null, !origin || origin === allowedOrigin);
+      const allowedOrigins = new Set([
+        process.env.FRONTEND_ORIGIN || "http://localhost:5173",
+        "https://localhost",
+      ]);
+      callback(null, !origin || allowedOrigins.has(origin));
     },
   }),
 );

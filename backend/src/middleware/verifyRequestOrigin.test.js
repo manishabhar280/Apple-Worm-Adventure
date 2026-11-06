@@ -5,7 +5,7 @@ import test from "node:test";
 import { errorHandler } from "./errorHandler.js";
 import { verifyRequestOrigin } from "./verifyRequestOrigin.js";
 
-test("requires the configured origin for unsafe cookie-authenticated requests", async (t) => {
+test("allows configured and Capacitor origins for unsafe cookie-authenticated requests", async (t) => {
   const previousOrigin = process.env.FRONTEND_ORIGIN;
   process.env.FRONTEND_ORIGIN = "https://game.example.test";
   const app = express();
@@ -30,6 +30,13 @@ test("requires the configured origin for unsafe cookie-authenticated requests", 
       Cookie: "apple_worm_session=opaque-session",
     },
   });
+  const capacitorAllowed = await fetch(url, {
+    method: "POST",
+    headers: {
+      Origin: "https://localhost",
+      Cookie: "apple_worm_session=opaque-session",
+    },
+  });
   const denied = await fetch(url, {
     method: "POST",
     headers: {
@@ -43,6 +50,7 @@ test("requires the configured origin for unsafe cookie-authenticated requests", 
   });
 
   assert.equal(allowed.status, 200);
+  assert.equal(capacitorAllowed.status, 200);
   assert.equal(denied.status, 403);
   assert.equal(missingOrigin.status, 403);
 });
