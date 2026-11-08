@@ -1,9 +1,15 @@
 import mongoose from "mongoose";
+import GameSession from "../models/GameSession.js";
 import Wallet from "../models/Wallet.js";
 import WalletTransaction from "../models/WalletTransaction.js";
+import { BOOSTER_CATALOG, BOOSTER_IDS } from "../../../shared/boosterCatalog.js";
+import { levels } from "../../../shared/levelData.js";
+import { findHint, replayGameActions } from "../../../shared/gameLogic.js";
+import { getLevelFeatureBoard } from "../../../shared/levelFeatures.js";
 
 const allowedTransactionSources = new Set(["level", "rewarded_ad", "adjustment", "gameplay"]);
 export const HINT_COIN_COST = 5;
+const boosterPurchaseReason = (boosterId) => `Booster purchase: ${boosterId}`;
 
 export class WalletError extends Error {
   constructor(statusCode, message) {
@@ -34,6 +40,8 @@ function isTransactionUnsupported(error) {
 export function createWalletService({
   WalletModel = Wallet,
   WalletTransactionModel = WalletTransaction,
+  GameSessionModel = GameSession,
+  levelDefinitions = levels,
   startSession = () => mongoose.startSession(),
 } = {}) {
   async function getOrCreateWallet(userId, session) {
@@ -128,6 +136,80 @@ export function createWalletService({
     return query;
   }
 
+  async function findGameplayTransaction(userId, requestId, session) {
+    let query = WalletTransactionModel.findOne({
+      user: userId,
+      source: "gameplay",
+      referenceId: requestId,
+    });
+    if (session && typeof query.session === "function") query = query.session(session);
+    return query;
+  }
+
+  async function findWallet(userId, session) {
+    let query = WalletModel.findOne({ user: userId });
+    if (session && typeof query.session === "function") query = query.session(session);
+    return query;
+  }
+
+  async function findActiveHint(userId, session) {
+    let query = GameSessionModel.findOne({
+      user: userId,
+      status: "in_progress",
+    }).sort({ startedAt: -1 });
+    if (session && typeof query.session === "function") query = query.session(session);
+    const gameSession = await query;
+    if (!gameSession) {
+      throw new WalletError(409, "An active game session is required to purchase a hint.");
+    }
+
+    const level = levelDefinitions[gameSession.levelNumber - 1];
+    if (!level) {
+      throw new WalletError(409, "The active game session references an unavailable level.");
+    }
+    const board = getLevelFeatureBoard(level);
+
+    let game;
+    try {
+      game = replayGameActions(
+        board,
+        gameSession.actions || [],
+        level.moveLimit,
+        { strict: true },
+      );
+    } catch {
+      throw new WalletError(409, "The active game session has no valid hint.");
+    }
+    if (!findHint(game, board, level.moveLimit)) {
+      throw new WalletError(409, "No valid hint is available for the active game session.");
+    }
+
+    const reservedSession = await GameSessionModel.findOneAndUpdate(
+      {
+        _id: gameSession._id,
+        user: userId,
+        status: "in_progress",
+        actions: gameSession.actions || [],
+      },
+      { $set: { updatedAt: new Date() } },
+      { new: true, session, timestamps: false },
+    );
+    if (!reservedSession) {
+      throw new WalletError(409, "The active game session changed. Please request a new hint.");
+    }
+  }
+
+  function serializeInventory(wallet) {
+    const inventory = wallet.boosterInventory || {};
+    return {
+      undo: inventory.undo || 0,
+      shield: inventory.shield || 0,
+      extra_moves: inventory.extra_moves || 0,
+      hint: inventory.hint || 0,
+      freeze: inventory.freeze || 0,
+    };
+  }
+
   async function getHintPurchase(userId, transaction, session) {
     let query = WalletModel.findOne({ user: userId });
     if (session && typeof query.session === "function") query = query.session(session);
@@ -155,6 +237,79 @@ export function createWalletService({
         balance: wallet.balance,
         currency: wallet.currency,
       };
+    },
+
+    async getBoosterInventory(user) {
+      const wallet = await getOrCreateWallet(String(user._id));
+      return {
+        balance: wallet.balance,
+        currency: wallet.currency,
+        inventory: serializeInventory(wallet),
+        catalog: BOOSTER_IDS.map((boosterId) => BOOSTER_CATALOG[boosterId]),
+      };
+    },
+
+    async purchaseBooster(user, boosterId, requestId) {
+      if (!BOOSTER_IDS.includes(boosterId)) {
+        throw new WalletError(400, "That booster is not available.");
+      }
+      const userId = String(user._id);
+      const booster = BOOSTER_CATALOG[boosterId];
+      try {
+        return await runAtomic(async (session) => {
+          const existing = await findGameplayTransaction(userId, requestId, session);
+          if (existing) {
+            if (existing.reason !== boosterPurchaseReason(boosterId)) {
+              throw new WalletError(409, "This purchase request was already used.");
+            }
+            const wallet = await findWallet(userId, session);
+            return {
+              balance: wallet.balance,
+              currency: wallet.currency,
+              inventory: serializeInventory(wallet),
+              boosterId,
+              transactionId: String(existing._id),
+              duplicate: true,
+            };
+          }
+
+          const wallet = await createTransaction(userId, {
+            type: "debit",
+            amount: booster.price,
+            reason: boosterPurchaseReason(boosterId),
+            source: "gameplay",
+            referenceId: requestId,
+          }, session);
+          const updatedWallet = await WalletModel.findOneAndUpdate(
+            { user: userId },
+            { $inc: { [`boosterInventory.${boosterId}`]: 1 } },
+            { new: true, runValidators: true, session },
+          );
+          return {
+            balance: updatedWallet.balance,
+            currency: updatedWallet.currency,
+            inventory: serializeInventory(updatedWallet),
+            boosterId,
+            transactionId: String(
+              (await findGameplayTransaction(userId, requestId, session))._id,
+            ),
+            duplicate: false,
+          };
+        });
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+        const existing = await findGameplayTransaction(userId, requestId);
+        if (!existing || existing.reason !== boosterPurchaseReason(boosterId)) throw error;
+        const wallet = await findWallet(userId);
+        return {
+          balance: wallet.balance,
+          currency: wallet.currency,
+          inventory: serializeInventory(wallet),
+          boosterId,
+          transactionId: String(existing._id),
+          duplicate: true,
+        };
+      }
     },
 
     async getTransactions(user, { limit = 100, page = 1 } = {}) {
@@ -201,7 +356,13 @@ export function createWalletService({
       try {
         return await runAtomic(async (session) => {
           const existing = await findHintTransaction(userId, requestId, session);
-          if (existing) return getHintPurchase(userId, existing, session);
+          if (existing) {
+            if (existing.reason !== "Gameplay hint") {
+              throw new WalletError(409, "This purchase request was already used.");
+            }
+            return getHintPurchase(userId, existing, session);
+          }
+          await findActiveHint(userId, session);
           const wallet = await createTransaction(userId, {
             type: "debit",
             amount: HINT_COIN_COST,
@@ -229,6 +390,9 @@ export function createWalletService({
         if (error?.code !== 11000) throw error;
         const existing = await findHintTransaction(userId, requestId);
         if (!existing) throw error;
+        if (existing.reason !== "Gameplay hint") {
+          throw new WalletError(409, "This purchase request was already used.");
+        }
         return getHintPurchase(userId, existing);
       }
     },

@@ -17,6 +17,10 @@ const transactionQuerySchema = z.object({
 const hintPurchaseSchema = z.object({
   requestId: z.string().uuid(),
 }).strict();
+const boosterPurchaseSchema = z.object({
+  boosterId: z.enum(["undo", "shield", "extra_moves", "hint", "freeze"]),
+  requestId: z.string().uuid(),
+}).strict();
 
 export function createWalletRouter({
   UserModel = User,
@@ -33,6 +37,13 @@ export function createWalletRouter({
   const router = Router();
 
   router.get("/balance", authenticate, asyncHandler(controller.getBalance));
+  router.get("/boosters", authenticate, asyncHandler(controller.getBoosterInventory));
+  router.post(
+    "/boosters",
+    authenticate,
+    validateRequest({ body: boosterPurchaseSchema }),
+    asyncHandler(controller.purchaseBooster),
+  );
   router.post(
     "/hints",
     authenticate,

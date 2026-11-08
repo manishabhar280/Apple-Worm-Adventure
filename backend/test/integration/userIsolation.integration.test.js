@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
 import test from "node:test";
+import { TOTAL_LEVELS } from "../../../shared/levelData.js";
 import GameSession from "../../src/models/GameSession.js";
 import RewardSession from "../../src/models/RewardSession.js";
 import Wallet from "../../src/models/Wallet.js";
@@ -116,7 +117,7 @@ test("rejects expired authentication, missing credentials, and invalid API input
   const invalidLevel = await context.request("/api/player/sessions", {
     method: "POST",
     cookie: (await context.login(account.email, account.password)).cookie,
-    body: { levelNumber: 51 },
+    body: { levelNumber: TOTAL_LEVELS + 1 },
   });
   const invalidBody = await context.request("/api/rewards/sessions", {
     method: "POST",

@@ -1,7 +1,8 @@
 import { createApiRequest } from "./apiRequest.js";
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.DEV ? "http://localhost:5000" : "");
+const apiBaseUrl = import.meta.env.DEV
+  ? ""
+  : import.meta.env.VITE_API_BASE_URL || "";
 const request = createApiRequest({ apiBaseUrl });
 
 export const api = {
@@ -55,6 +56,17 @@ export const api = {
     return request("/api/wallet/hints", {
       method: "POST",
       body: JSON.stringify({ requestId }),
+    });
+  },
+
+  getBoosterInventory() {
+    return request("/api/wallet/boosters");
+  },
+
+  purchaseBooster(boosterId, requestId) {
+    return request("/api/wallet/boosters", {
+      method: "POST",
+      body: JSON.stringify({ boosterId, requestId }),
     });
   },
 

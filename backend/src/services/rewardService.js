@@ -288,8 +288,12 @@ export function createRewardService({
           }
           if (current.rewardType === "hint") {
             const level = levels[eligibleGameSession.levelNumber - 1];
-            const state = replayGameActions(level.board, eligibleGameSession.actions || []);
-            const direction = findHint(state, level.board);
+            const state = replayGameActions(
+              level.board,
+              eligibleGameSession.actions || [],
+              level.moveLimit,
+            );
+            const direction = findHint(state, level.board, level.moveLimit);
             if (!direction) {
               const error = new Error("No safe hint is available for this game position.");
               error.statusCode = 409;

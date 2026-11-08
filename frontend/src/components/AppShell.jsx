@@ -1,21 +1,27 @@
 import React from "react";
 
 const navigation = [
-  { path: "/dashboard", label: "Home", icon: "⌂" },
+  { path: "/", label: "Home", icon: "⌂" },
   { path: "/levels", label: "Levels", icon: "▦" },
-  { path: "/history", label: "History", icon: "◷" },
-  { path: "/leaderboard", label: "Leaderboard", icon: "♜" },
+  { path: "/daily", label: "Daily Challenge", icon: "◷" },
+  { path: "/collection", label: "Worm Collection", icon: "🐛" },
+  { path: "/statistics", label: "Statistics", icon: "▤" },
   { path: "/achievements", label: "Achievements", icon: "✧" },
-  { path: "/wallet", label: "Wallet", icon: "◉" },
-  { path: "/profile", label: "Profile", icon: "☺" },
+  { path: "/settings", label: "Settings", icon: "⚙" },
 ];
 
-function AppShell({ path, navigate, player, onLogout, children }) {
+function AppShell({ path, navigate, reducedMotion, darkMode, children }) {
   const isGame = path === "/game";
   const isLanding = path === "/";
+  const shellClasses = [
+    "app-shell",
+    isGame && "app-shell--game",
+    reducedMotion && "app-shell--reduced-motion",
+    darkMode && "app-shell--dark-mode",
+  ].filter(Boolean).join(" ");
 
   return (
-    <div className={`app-shell ${isGame ? "app-shell--game" : ""}`}>
+    <div className={shellClasses}>
       <header className="app-topbar">
         <button
           className="app-brand"
@@ -32,11 +38,11 @@ function AppShell({ path, navigate, player, onLogout, children }) {
 
         {!isLanding && (
           <nav className="main-nav" aria-label="Main navigation">
-            {[...navigation, ...(player?.role === "admin" ? [{ path: "/admin", label: "Admin", icon: "⚙" }] : [])].map((item) => (
+            {navigation.map((item) => (
               <button
                 type="button"
                 key={item.path}
-                className={`nav-link ${path === item.path || (path === "/profile" && item.path === "/dashboard") ? "nav-link--active" : ""}`}
+                className={`nav-link ${path === item.path ? "nav-link--active" : ""}`}
                 onClick={() => navigate(item.path)}
               >
                 <span aria-hidden="true">{item.icon}</span>
@@ -44,32 +50,6 @@ function AppShell({ path, navigate, player, onLogout, children }) {
               </button>
             ))}
           </nav>
-        )}
-
-        {player ? (
-          <div className="signed-in-actions">
-            <button
-              className="profile-shortcut"
-              type="button"
-              onClick={() => navigate("/profile")}
-              aria-label={`Open ${player.name}'s profile`}
-            >
-              <span className="profile-avatar">{player.avatar || "🐛"}</span>
-              <span>{player.name.split(" ")[0]}</span>
-            </button>
-            <button className="text-button logout-button" type="button" onClick={onLogout}>
-              Log out
-            </button>
-          </div>
-        ) : (
-          <div className="topbar-actions">
-            <button type="button" className="text-button" onClick={() => navigate("/login")}>
-              Log in
-            </button>
-            <button type="button" className="small-primary" onClick={() => navigate("/register")}>
-              Sign up
-            </button>
-          </div>
         )}
       </header>
       {children}

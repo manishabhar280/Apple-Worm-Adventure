@@ -31,6 +31,15 @@ export default defineConfig(({ command, mode }) => {
 
   return {
     server: {
+      proxy: {
+        "/api": {
+          target: "https://apple-worm-adventure-api.onrender.com",
+          changeOrigin: true,
+          headers: {
+            Origin: "https://apple-worm-adventure-frontend.onrender.com",
+          },
+        },
+      },
       fs: {
         allow: [resolve(frontendDirectory, "..")],
       },

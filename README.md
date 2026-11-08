@@ -1,6 +1,6 @@
 # Apple Worm Adventure
 
-Apple Worm Adventure is a full-stack grid puzzle game. Guide a growing worm through orchard boards, collect every apple, avoid hazards, and reach the portal. Registered players can save game progress and view their account statistics.
+Apple Worm Adventure is a guest-based grid puzzle game. Start immediately, guide a growing worm through orchard boards, collect every apple, avoid hazards, and reach the portal. Level results, active puzzles, and settings are saved locally in the browser; no account or backend connection is required to play.
 
 ## Project URLs
 
@@ -11,13 +11,18 @@ These are the project URLs supplied for this documentation. Their availability a
 
 ## Features
 
-- 50 playable levels with keyboard, WASD, and swipe controls; hints, pause, restart, and level unlocking.
-- JWT authentication in an HttpOnly browser cookie, bcrypt password hashing, and player/admin role authorization.
-- MongoDB-backed game sessions, resumable progress, best results, history, dashboard, and leaderboard.
-- Player-scoped achievement progress for level completions, apples, stars, perfect levels, and winning streaks.
-- Virtual coin wallet and transaction ledger; gameplay hints cost 5 coins and are debited server-side. No client balance mutation endpoint.
-- Reward configuration/session flow with daily limits, cooldowns, and duplicate-claim protection. Development simulation supports server-verified bonus coins and safe gameplay hints; no real ad provider is integrated, and production disables rewards.
-- Admin-only dashboard and audited reward configuration updates.
+- One continuous 100-level progression with keyboard, WASD, and swipe controls; locally solved hints, pause, restart, and sequential unlocking.
+- Versioned and validated browser-local guest progress, including completed-level scores and stars, unlocked level, active puzzle actions, and the reduced-motion preference.
+- Local achievements derived from saved level results; they do not grant online rewards.
+- Optional golden apples, hidden treasures, and four reusable puzzle mechanics are configured in `shared/levelFeatures.js`, separate from the canonical 100 level layouts.
+- A UTC-based daily challenge with idempotent local streak rewards; guest coins are cosmetic-only and are separate from the authenticated server wallet.
+- Five worm skins unlock from completed-level milestones and can be previewed/equipped locally.
+- A browser-local reduced-motion setting and responsive layouts.
+- Optional moving obstacles advance one path step with each valid in-bounds move. Collisions use the resulting move tick; invalid and out-of-bounds moves do not advance them. Their positions are replayed from shared rules, and hints are unavailable on these boards until the solver supports them.
+- Optional ice tiles make the worm slide in its chosen direction while its head remains on ice. Each slide step resolves normal collisions and item interactions; wall contact stops at the last in-bounds cell. A direction action advances moving obstacles once, before the slide steps, and hints are unavailable on ice boards until the solver supports them.
+- Optional positive-integer `moveLimit` metadata marks a level as a limited-move challenge (`isChallengeLevel` identifies it). A direction action counts once regardless of ice or teleport movement. Each internal step checks collisions before pickups; the moving obstacles use the next action tick once. A wall stops an ice slide at the last in-bounds cell, while obstacles, locked gates, and body collisions fail the attempt. After movement and pickups, a completed win takes precedence over exhaustion; otherwise reaching the move limit fails the challenge. Limited-move hints are disabled until the solver can guarantee a route within the limit.
+- The legacy backend retains JWT authentication, account-scoped MongoDB sessions/progress, profiles, server achievements, wallet/boosters, rewards, leaderboard, and admin services for existing account data and API clients. These features are not exposed in the guest game interface.
+- Guest play does not make authentication or gameplay API requests. It has no wallet, purchases, boosters, rewarded ads, account sync, or online leaderboard.
 - Responsive React screens with loading, empty, and error states.
 
 ## Technologies
@@ -33,9 +38,10 @@ These are the project URLs supplied for this documentation. Their availability a
 
 ```text
 frontend/
-  src/App.jsx             SPA navigation, authentication, saved game state
-  src/pages/              Game, account, dashboard, wallet, and data screens
-  src/services/api.js     Frontend HTTP API client
+  src/App.jsx             Guest navigation, local progress, and game state
+  src/pages/              Guest landing, levels, gameplay, achievements, and settings
+  src/data/guestProgress.js Versioned and validated browser-local save
+  src/services/api.js     Legacy HTTP API client for account-dependent features
   e2e/                    Playwright browser tests
 backend/
   src/app.js              Express middleware and route registration
@@ -43,12 +49,12 @@ backend/
   src/controllers/        HTTP request/response handlers
   src/services/           Authentication, gameplay, wallet, rewards, and stats
   src/models/             Mongoose persistence models
-shared/                   Canonical level definitions and game rules
+shared/                   Canonical level definitions, game rules, world progression, and additive level features
 docs/                     User guide, deployment checklist, MongoDB test setup
 render.yaml               Render backend service configuration
 ```
 
-The React/Vite frontend calls the Express API. The API validates requests, authenticates the player, and delegates game and account operations to services backed by Mongoose models. Canonical level boards and game rules are shared so the server can replay submitted moves and calculate results rather than trusting client-provided scores.
+The guest React/Vite game runs without the Express API and stores its progress in browser local storage. The existing Express API, authentication routes, MongoDB models, and account-scoped services remain available for existing account data and other API clients; guest-local results are not sent to the server or trusted for server rewards.
 
 ## Local setup
 
@@ -104,7 +110,7 @@ All API routes are prefixed with `/api`. Protected routes require `Authorization
 | Authentication/profile | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `PATCH /api/auth/me`, `POST /api/auth/logout` |
 | Player/game | `GET /api/player/progress`, `GET /api/player/dashboard`, `GET /api/player/history`, `POST /api/player/sessions`, `PUT /api/player/sessions/:sessionId/actions`, `GET /api/player/leaderboard` |
 | Achievements | `GET /api/achievements` |
-| Wallet | `GET /api/wallet/balance`, `GET /api/wallet/transactions`, `POST /api/wallet/hints` |
+| Wallet | `GET /api/wallet/balance`, `GET /api/wallet/boosters`, `POST /api/wallet/boosters`, `GET /api/wallet/transactions`, `POST /api/wallet/hints` |
 | Rewards | `GET /api/rewards/configuration`, `POST /api/rewards/sessions`, `POST /api/rewards/sessions/:sessionId/verify`, `GET /api/rewards/history` |
 | Admin only | `GET /api/admin/dashboard`, `GET /api/admin/reward-configurations`, `PATCH /api/admin/reward-configurations/:rewardType` |
 
@@ -142,7 +148,7 @@ Production sessions use Secure, HttpOnly cookies and logout revokes issued sessi
 
 - The project URLs are listed as supplied, but their live availability and behavior were not verified in this test run.
 - There is no real ad SDK or server-side ad-provider verification. Production rewards are disabled; the local simulation is not an ad.
-- Rewarded revive, double score, extra moves, and boosters are not implemented and are disabled. Rewarded hints and bonus coins are supported only in the explicitly labeled development simulation until a real provider is configured. The separate 5-coin gameplay hint is available independently.
+- Rewarded revive and double score remain unavailable. In-game boosters are purchased directly with coins and do not simulate rewarded advertisements. The separate 5-coin gameplay hint remains available; rewarded hints and bonus coins are supported only in the explicitly labeled development simulation until a real provider is configured.
 - Sessions expire after the configured JWT lifetime (one hour by default); there is no refresh-token flow. Browser support for cross-site cookies varies; test the deployed origins in target browsers.
 - Transaction-dependent features require MongoDB replica-set/Atlas support.
 - Automated browser E2E and opt-in MongoDB-backed integration suites are available; hosted-service and production browser tests remain unverified.

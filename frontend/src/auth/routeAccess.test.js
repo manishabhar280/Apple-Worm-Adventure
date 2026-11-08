@@ -2,47 +2,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getRouteAccess } from "./routeAccess.js";
 
-test("waits for the saved session before rendering routes", () => {
-  assert.deepEqual(getRouteAccess("/dashboard", "loading", null), { type: "wait" });
-  assert.deepEqual(getRouteAccess("/dashboard", "error", null), { type: "wait" });
-  assert.deepEqual(getRouteAccess("/", "loading", null), { type: "render" });
+test("guest routes render immediately without verifying an account session", () => {
+  for (const path of ["/", "/levels", "/game", "/achievements", "/settings"]) {
+    assert.deepEqual(getRouteAccess(path), { type: "render" });
+  }
 });
 
-test("redirects anonymous users from all account routes to login", () => {
+test("legacy account-only routes return to the guest game without an auth redirect", () => {
   for (const path of [
-    "/dashboard",
-    "/levels",
-    "/game",
     "/profile",
     "/history",
     "/leaderboard",
-    "/achievements",
     "/wallet",
     "/admin",
+    "/login",
+    "/register",
+    "/levels/desert",
   ]) {
-    assert.deepEqual(getRouteAccess(path, "anonymous", null), {
+    assert.deepEqual(getRouteAccess(path), {
       type: "redirect",
-      destination: "/login",
+      destination: "/",
     });
   }
-  assert.deepEqual(getRouteAccess("/", "anonymous", null), { type: "render" });
-});
-
-test("redirects authenticated users away from login and registration", () => {
-  for (const path of ["/login", "/register"]) {
-    assert.deepEqual(getRouteAccess(path, "authenticated", "player"), {
-      type: "redirect",
-      destination: "/dashboard",
-    });
-  }
-});
-
-test("allows only administrators into the admin route", () => {
-  assert.deepEqual(getRouteAccess("/admin", "authenticated", "player"), {
+  assert.deepEqual(getRouteAccess("/dashboard"), {
     type: "redirect",
-    destination: "/dashboard",
-  });
-  assert.deepEqual(getRouteAccess("/admin", "authenticated", "admin"), {
-    type: "render",
+    destination: "/levels",
   });
 });

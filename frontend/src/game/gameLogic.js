@@ -1,8 +1,16 @@
 export {
   DIRECTIONS,
+  applyGameAction,
   createInitialGameState,
   findHint,
+  getMovingObstaclePositions,
+  isChallengeLevel,
   moveGame,
   replayGameActions,
+  replayGameActionsWithHistory,
   togglePause,
+  validateKeyGateBoard,
+  validateIceTileBoard,
+  validateMovingObstacleBoard,
+  validateTeleportBoard,
 } from "../../../shared/gameLogic.js";

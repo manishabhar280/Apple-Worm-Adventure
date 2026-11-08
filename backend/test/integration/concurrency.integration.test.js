@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { levels } from "../../../shared/levelData.js";
 import RewardSession from "../../src/models/RewardSession.js";
 import RewardUsage from "../../src/models/RewardUsage.js";
 import Wallet from "../../src/models/Wallet.js";
@@ -8,6 +9,7 @@ import WalletTransaction from "../../src/models/WalletTransaction.js";
 import {
   createIntegrationContext,
   databaseTestSkipReason,
+  routeActions,
   waitForSimulation,
 } from "./mongoTestSupport.js";
 
@@ -33,6 +35,21 @@ test("serializes concurrent wallet debits and duplicate reward claims", {
     reason: "Concurrency test fixture",
   });
 
+  const game = await context.request("/api/player/sessions", {
+    method: "POST",
+    cookie,
+    body: { levelNumber: 1 },
+  });
+  assert.equal(game.response.status, 201);
+  const sessionId = game.body.session.id;
+  const actions = routeActions(levels[0]);
+  const partial = await context.request(`/api/player/sessions/${sessionId}/actions`, {
+    method: "PUT",
+    cookie,
+    body: { actions: actions.slice(0, 1) },
+  });
+  assert.equal(partial.response.status, 200);
+
   const purchases = await Promise.all(Array.from({ length: 8 }, () =>
     context.request("/api/wallet/hints", {
       method: "POST",
@@ -44,12 +61,7 @@ test("serializes concurrent wallet debits and duplicate reward claims", {
   assert.equal((await Wallet.findOne({ user: account.body.user.id })).balance, 0);
   assert.equal((await WalletTransaction.find({ user: account.body.user.id })).length, 3);
 
-  const game = await context.request("/api/player/sessions", {
-    method: "POST",
-    cookie,
-    body: { levelNumber: 1 },
-  });
-  const referenceId = game.body.session.id;
+  const referenceId = sessionId;
   const duplicateSaves = await Promise.all([1, 2].map(() =>
     context.request(`/api/player/sessions/${referenceId}/actions`, {
       method: "PUT",

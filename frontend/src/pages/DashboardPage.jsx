@@ -42,8 +42,26 @@ function DashboardPage({ navigate, player, token, onResume }) {
             </section>
             <div className="dashboard-grid">
               <section className="content-card continue-card">
-                <div className="card-heading"><div><p className="eyebrow">Pick up where you left off</p><h2>{result.resume.sessionId ? "Resume your puzzle" : `Level ${result.resume.levelNumber}`}</h2></div><span className="card-apple">🍎</span></div>
-                <p>{result.resume.sessionId ? "Continue your saved moves and finish the puzzle." : "Your next unlocked puzzle is ready."}</p>
+                <div className="card-heading"><div><p className="eyebrow">One continuous adventure</p><h2>{result.resume.sessionId ? "Pick up where you left off" : `Next up: Level ${result.resume.levelNumber}`}</h2></div><span className="card-apple">🍎</span></div>
+                <p>{result.resume.sessionId ? "Your saved puzzle is right where you left it." : "Every apple brings you one step closer to the final portal."}</p>
+                <div className="dashboard-journey-progress">
+                  <div>
+                    <span>Journey progress</span>
+                    <strong>{result.stats.completedLevels} / {result.stats.totalLevels}</strong>
+                  </div>
+                  <div
+                    className="journey-progress-track"
+                    role="progressbar"
+                    aria-label="Completed levels"
+                    aria-valuemin={0}
+                    aria-valuemax={result.stats.totalLevels}
+                    aria-valuenow={result.stats.completedLevels}
+                  >
+                    <span style={{
+                      width: `${(result.stats.completedLevels / result.stats.totalLevels) * 100}%`,
+                    }} />
+                  </div>
+                </div>
                 <button className="small-primary" type="button" onClick={() => onResume(result.resume)}>Resume level {result.resume.levelNumber} <span aria-hidden="true">→</span></button>
               </section>
               <section className="content-card">

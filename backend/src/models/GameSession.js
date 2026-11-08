@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { BOOSTER_ACTIONS } from "../../../shared/boosterCatalog.js";
 import { registerModel } from "./modelHelpers.js";
 
 const gameSessionSchema = new mongoose.Schema(
@@ -62,11 +63,11 @@ const gameSessionSchema = new mongoose.Schema(
     },
     actions: {
       type: [String],
-      enum: ["up", "down", "left", "right"],
+      enum: ["up", "down", "left", "right", ...BOOSTER_ACTIONS],
       default: [],
       validate: {
-        validator: (actions) => actions.length <= 1000,
-        message: "A game session cannot contain more than 1000 actions.",
+        validator: (actions) => actions.length <= 2000,
+        message: "A game session cannot contain more than 2000 actions.",
       },
     },
   },

@@ -4,7 +4,7 @@
 
 - Node.js 20 or newer and npm.
 - Chromium for the frontend Playwright tests.
-- Docker and Docker Compose are not required for unit or browser tests. Docker is needed for the local MongoDB integration setup below.
+- Docker and Docker Compose are optional. Use Docker for the disposable container setup below, or use a dedicated native local MongoDB replica set.
 - A MongoDB replica set is required for wallet and reward transaction tests; a standalone MongoDB server is insufficient.
 
 Install the locked dependencies from the project root:
@@ -106,11 +106,11 @@ try {
   node --test test/integration/mongoTestSupport.test.js
   if ($LASTEXITCODE -ne 0) { throw 'MongoDB safety-guard tests failed.' }
 
-  # Run exactly the four database-backed test cases (one journey, two isolation,
-  # and one concurrency case).
+  # Run the four MongoDB-backed integration test files.
   node --test test/integration/userJourney.integration.test.js `
     test/integration/userIsolation.integration.test.js `
-    test/integration/concurrency.integration.test.js
+    test/integration/concurrency.integration.test.js `
+    test/integration/walletRollback.integration.test.js
   if ($LASTEXITCODE -ne 0) { throw 'MongoDB integration tests failed.' }
 
   # Then run the complete backend suite with the same isolated test target.
@@ -133,10 +133,53 @@ If replica-set initialization or target verification fails after the container s
 
 Remote database credentials and URIs are intentionally unsupported. Integration cleanup is record-scoped, but tests still write to the configured local test databases.
 
+### Native Windows MongoDB replica set
+
+Docker is not required if a dedicated native local MongoDB replica set is available. The verified native configuration uses MongoDB **9.0.2**, with `mongod.exe` at `C:\Program Files\MongoDB\Server\9.0\bin\mongod.exe`, a dedicated data directory at `D:\MongoDB-Test\data`, loopback bind address `127.0.0.1`, port `27018`, and replica set `rs0`. It uses this test-only URI:
+
+```text
+mongodb://127.0.0.1:27018/apple_worm_adventure_test_local?replicaSet=rs0
+```
+
+These instructions use only the dedicated local test instance. Do not substitute production, staging, remote, or shared-user data. If port `27018` is occupied, stop here and inspect it; do not connect to or stop the existing process. Run `mongod.exe` in its own CMD window so it is clear which local test server is running:
+
+```cmd
+"C:\Program Files\MongoDB\Server\9.0\bin\mongod.exe" --version
+if not exist "D:\MongoDB-Test\data" mkdir "D:\MongoDB-Test\data"
+"C:\Program Files\MongoDB\Server\9.0\bin\mongod.exe" --dbpath "D:\MongoDB-Test\data" --bind_ip 127.0.0.1 --port 27018 --replSet rs0
+```
+
+Keep that window open. In a second CMD window, initialize the replica set. This command is for a newly created test instance; if it reports that the replica set is already initialized, check its status rather than trying to reinitialize or reset it:
+
+```cmd
+mongosh --host 127.0.0.1 --port 27018 --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27018'}]})"
+```
+
+Verify that this exact local server belongs to `rs0` and is PRIMARY before running tests:
+
+```cmd
+mongosh --host 127.0.0.1 --port 27018 --eval "const h=db.hello(); if(h.setName!=='rs0'||!h.isWritablePrimary||!h.hosts.includes('127.0.0.1:27018')) quit(1); print('Verified local rs0 PRIMARY')"
+```
+
+From the second CMD window, set `MONGODB_TEST_URI` only for that window, clear any inherited `MONGODB_URI` in this test shell, then run the test files from the repository. Closing the window clears these process-local settings; this does not change deployment or persistent environment configuration.
+
+```cmd
+set "MONGODB_TEST_URI=mongodb://127.0.0.1:27018/apple_worm_adventure_test_local?replicaSet=rs0"
+set "MONGODB_URI="
+cd /d "D:\Intership task\VELoop Rewards\Apple-Worm-Adventure\backend"
+node --test test/integration/mongoTestSupport.test.js
+if errorlevel 1 exit /b 1
+node --test test/integration/userJourney.integration.test.js test/integration/userIsolation.integration.test.js test/integration/concurrency.integration.test.js test/integration/walletRollback.integration.test.js
+if errorlevel 1 exit /b 1
+npm test
+```
+
+The harness safety-check file is `mongoTestSupport.test.js`; the four database-backed integration files are `userJourney.integration.test.js`, `userIsolation.integration.test.js`, `concurrency.integration.test.js`, and `walletRollback.integration.test.js`. The rollback test deliberately injects a failure after the booster purchase updates inventory, then verifies that wallet balance, booster inventory, and transaction ledger all remain unchanged.
+
 ## Test coverage and limitations
 
 - Existing backend and frontend unit tests use local mocks or pure logic and do not require MongoDB.
 - Frontend browser E2E exercises the UI with a mocked API, not actual backend authorization or persistence.
-- MongoDB tests are the only tests here that verify real MongoDB transactions, indexes, persistence, and backend restart behavior.
+- MongoDB tests verify real MongoDB transactions, indexes, persistence, and backend restart behavior against the isolated local replica set.
 - Production ad-provider verification cannot be tested because no real provider SDK, credentials, or deployment are configured. Automated tests verify that development simulation is not selected by the production provider factory.
 - Hosted deployment, real browser third-party-cookie policies, and production MongoDB are not tested by local suites.

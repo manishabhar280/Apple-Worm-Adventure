@@ -13,6 +13,18 @@ export function createWalletController(walletService) {
       });
     },
 
+    async getBoosterInventory(request, response) {
+      response.json(await walletService.getBoosterInventory(request.user));
+    },
+
+    async purchaseBooster(request, response) {
+      response.json(await walletService.purchaseBooster(
+        request.user,
+        request.body.boosterId,
+        request.body.requestId,
+      ));
+    },
+
     async purchaseHint(request, response) {
       response.json(await walletService.purchaseHint(request.user, request.body.requestId));
     },

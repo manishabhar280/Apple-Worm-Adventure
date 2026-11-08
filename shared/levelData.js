@@ -49,7 +49,74 @@ const levelNames = [
   "The Last Apple",
   "Everlasting Orchard",
   "Home at Last",
+  "Whispering Willow",
+  "The Moonlit Grove",
+  "Cinnamon Circuit",
+  "The Secret Orchard",
+  "Foxglove Crossing",
+  "The Honeycomb Maze",
+  "Silverleaf Trail",
+  "The Quiet Canopy",
+  "Brambleberry Run",
+  "The Lantern Orchard",
+  "Pinecone Passage",
+  "The Orchard Below",
+  "Thistledown Track",
+  "The Amber Labyrinth",
+  "Firefly Fields",
+  "The Crooked Bough",
+  "Clover Crown",
+  "The Hidden Hollow",
+  "Starlight Switchback",
+  "The Mossy Keep",
+  "Wildflower Way",
+  "The Tanglewood",
+  "Moonapple Meadow",
+  "The Briar Gate",
+  "The Twilit Trail",
+  "The Orchard Crown",
+  "Dappled Dells",
+  "The Winding Bough",
+  "The Silver Orchard",
+  "The Elder Grove",
+  "Foxfire Crossing",
+  "The Thorned Path",
+  "The Overgrown Maze",
+  "The Sunken Garden",
+  "The Old Orchard",
+  "The Emerald Circuit",
+  "The Crowned Canopy",
+  "The Last Labyrinth",
+  "The Wildwood Crown",
+  "The Celestial Grove",
+  "The Orchard Eternal",
+  "The Golden Labyrinth",
+  "The Master Gardener",
+  "The Final Harvest",
+  "The Worm's Triumph",
+  "The Heart of the Orchard",
+  "The Infinite Bough",
+  "The Grand Harvest",
+  "The Everlasting Path",
+  "The Orchard Beyond",
 ];
+
+export const TOTAL_LEVELS = 100;
+export const DIFFICULTY_TIERS = [
+  "Easy",
+  "Medium",
+  "Hard",
+  "Expert",
+  "Master",
+];
+
+function getDifficulty(number) {
+  const tierIndex = Math.min(
+    DIFFICULTY_TIERS.length - 1,
+    Math.floor(((number - 1) * DIFFICULTY_TIERS.length) / TOTAL_LEVELS),
+  );
+  return DIFFICULTY_TIERS[tierIndex];
+}
 
 function createRoute(rows, columns) {
   const route = [];
@@ -121,6 +188,7 @@ function createLevel(number) {
   return {
     number,
     name: levelNames[number - 1],
+    difficulty: getDifficulty(number),
     description:
       number < 10
         ? "A sunny little puzzle to get you started."
@@ -142,6 +210,6 @@ function createLevel(number) {
   };
 }
 
-export const levels = Array.from({ length: 50 }, (_, index) =>
+export const levels = Array.from({ length: TOTAL_LEVELS }, (_, index) =>
   createLevel(index + 1),
 );

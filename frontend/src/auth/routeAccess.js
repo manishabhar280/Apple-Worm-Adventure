@@ -1,38 +1,19 @@
-const accountPaths = new Set([
-  "/dashboard",
-  "/levels",
-  "/game",
+const unavailableRoutes = new Set([
+  "/login",
+  "/register",
   "/profile",
   "/history",
   "/leaderboard",
-  "/achievements",
   "/wallet",
   "/admin",
 ]);
 
-export function getRouteAccess(path, authStatus, role) {
-  const needsVerifiedSession =
-    accountPaths.has(path) || path === "/login" || path === "/register";
-  if (
-    needsVerifiedSession &&
-    (authStatus === "loading" || authStatus === "error")
-  ) {
-    return { type: "wait" };
+export function getRouteAccess(path) {
+  if (path === "/dashboard") {
+    return { type: "redirect", destination: "/levels" };
   }
-
-  if (authStatus !== "authenticated") {
-    return accountPaths.has(path)
-      ? { type: "redirect", destination: "/login" }
-      : { type: "render" };
+  if (unavailableRoutes.has(path) || path.startsWith("/levels/")) {
+    return { type: "redirect", destination: "/" };
   }
-
-  if (path === "/login" || path === "/register") {
-    return { type: "redirect", destination: "/dashboard" };
-  }
-
-  if (path === "/admin" && role !== "admin") {
-    return { type: "redirect", destination: "/dashboard" };
-  }
-
   return { type: "render" };
 }

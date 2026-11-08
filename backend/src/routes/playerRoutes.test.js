@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import test from "node:test";
 import { errorHandler } from "../middleware/errorHandler.js";
 import { createPlayerRouter } from "./playerRoutes.js";
-import { levels } from "../../../shared/levelData.js";
+import { levels, TOTAL_LEVELS } from "../../../shared/levelData.js";
 
 process.env.JWT_SECRET ??= "test_only_secret_that_is_not_used_in_production_12345";
 const userIds = ["aaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbb"];
@@ -40,6 +40,7 @@ function createModels() {
   const progressRecords = [];
   const sessions = [];
   const achievements = [];
+  const wallets = new Map();
   let nextSession = 1;
 
   const User = {
@@ -147,6 +148,23 @@ function createModels() {
     },
   };
 
+  const WalletModel = {
+    async findOneAndUpdate(filter, update) {
+      const wallet = wallets.get(String(filter.user));
+      if (!wallet) return null;
+      for (const [path, condition] of Object.entries(filter)) {
+        if (!path.startsWith("boosterInventory.")) continue;
+        const boosterId = path.slice("boosterInventory.".length);
+        if ((wallet.boosterInventory[boosterId] || 0) < condition.$gte) return null;
+      }
+      for (const [path, amount] of Object.entries(update.$inc || {})) {
+        const boosterId = path.slice("boosterInventory.".length);
+        wallet.boosterInventory[boosterId] += amount;
+      }
+      return wallet;
+    },
+  };
+
   const Achievement = {
     find(filter) {
       return makeQuery(() => achievements.filter((row) =>
@@ -163,18 +181,37 @@ function createModels() {
     },
   };
 
-  return { User, LevelProgress, GameSession, Achievement, progressRecords, sessions, achievements };
+  return {
+    User,
+    LevelProgress,
+    GameSession,
+    Achievement,
+    WalletModel,
+    progressRecords,
+    sessions,
+    achievements,
+    wallets,
+  };
 }
 
-async function createServer() {
+async function createServer(levelDefinitions = levels) {
   const models = createModels();
+  const startSession = async () => ({
+    async withTransaction(operation) {
+      await operation(this);
+    },
+    async endSession() {},
+  });
   const app = express();
   app.use(express.json());
   app.use("/api/player", createPlayerRouter({
     UserModel: models.User,
     LevelProgressModel: models.LevelProgress,
     GameSessionModel: models.GameSession,
+    WalletModel: models.WalletModel,
     AchievementModel: models.Achievement,
+    levelDefinitions,
+    startSession,
   }));
   app.use(errorHandler);
   const server = app.listen(0);
@@ -234,6 +271,491 @@ function routeActions(level) {
   return directions;
 }
 
+test("replays key collection and gate access on the server without client mechanic state", async (t) => {
+  const mechanicLevel = {
+    ...levels[0],
+    board: {
+      rows: 5,
+      columns: 7,
+      worm: [
+        { row: 2, column: 0 },
+        { row: 2, column: 1 },
+      ],
+      apples: [{ row: 2, column: 5 }],
+      obstacles: [],
+      portal: { row: 2, column: 6 },
+      keys: [{ id: "bronze", row: 2, column: 2 }],
+      gates: [{ id: "bronze-gate", keyId: "bronze", row: 2, column: 3 }],
+    },
+  };
+  const context = await createServer([mechanicLevel, ...levels.slice(1)]);
+  t.after(context.close);
+  const started = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 1 }),
+  });
+  assert.equal(started.response.status, 201);
+
+  const sessionActionsPath = `/api/player/sessions/${started.body.session.id}/actions`;
+  const forgedState = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({
+      actions: ["right"],
+      collectedKeyIds: ["bronze"],
+      positions: [{ row: 2, column: 6 }],
+      gateStates: { "bronze-gate": "open" },
+      status: "completed",
+    }),
+  });
+  assert.equal(forgedState.response.status, 400);
+
+  const saved = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right", "right", "right", "right", "right"] }),
+  });
+  assert.equal(saved.response.status, 200);
+  assert.equal(saved.body.session.status, "completed");
+  assert.equal(saved.body.session.moves, 5);
+  assert.equal(saved.body.session.score, 100);
+});
+
+test("rejects locked-world sessions and ignores client-supplied unlock status", async (t) => {
+  const context = await createServer();
+  t.after(context.close);
+
+  const forgedUnlock = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 26, unlockedWorld: true }),
+  });
+  assert.equal(forgedUnlock.response.status, 400);
+
+  const lockedWorld = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 26 }),
+  });
+  assert.equal(lockedWorld.response.status, 403);
+  assert.match(lockedWorld.body.error.message, /world is still locked/i);
+  assert.equal(context.sessions.length, 0);
+});
+
+test("preserves progress and gates each world using completed-level records", async (t) => {
+  const context = await createServer();
+  t.after(context.close);
+
+  const completeThrough = async (lastLevel) => {
+    for (let levelNumber = 1; levelNumber <= lastLevel; levelNumber += 1) {
+      const existing = context.progressRecords.find((row) =>
+        row.user === userIds[0] && row.levelNumber === levelNumber);
+      if (existing) {
+        Object.assign(existing, {
+          status: "completed",
+          bestScore: levelNumber * 10,
+          bestMoves: levelNumber,
+          stars: 3,
+          completedAt: new Date(),
+        });
+        continue;
+      }
+      context.progressRecords.push({
+        user: userIds[0],
+        levelNumber,
+        status: "completed",
+        bestScore: levelNumber * 10,
+        bestMoves: levelNumber,
+        stars: 3,
+        completedAt: new Date(),
+      });
+    }
+  };
+  const startLevel = async (levelNumber) => request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber }),
+  });
+
+  const initiallyUnlocked = await request(context, "/api/player/progress");
+  assert.equal(initiallyUnlocked.body.unlockedLevel, 1);
+  assert.equal((await startLevel(1)).response.status, 201);
+
+  await completeThrough(25);
+  const forestComplete = await request(context, "/api/player/progress");
+  assert.equal(forestComplete.body.unlockedLevel, 26);
+  assert.equal(forestComplete.body.levels.length, 25);
+  assert.equal((await startLevel(26)).response.status, 201);
+
+  await completeThrough(50);
+  const desertComplete = await request(context, "/api/player/progress");
+  assert.equal(desertComplete.body.unlockedLevel, 51);
+  assert.equal(desertComplete.body.levels.length, 50);
+  assert.equal((await startLevel(51)).response.status, 201);
+
+  await completeThrough(75);
+  const iceComplete = await request(context, "/api/player/progress");
+  assert.equal(iceComplete.body.unlockedLevel, 76);
+  assert.equal(iceComplete.body.levels.length, 75);
+  assert.equal((await startLevel(76)).response.status, 201);
+
+  await completeThrough(100);
+  const allWorldsComplete = await request(context, "/api/player/progress");
+  assert.equal(allWorldsComplete.body.unlockedLevel, 100);
+  assert.equal(allWorldsComplete.body.levels.length, 100);
+  assert.ok(allWorldsComplete.body.levels.every(
+    (record) => record.status === "completed",
+  ));
+  assert.equal((await startLevel(100)).response.status, 201);
+});
+
+test("validates booster activations, consumes only owned inventory, and protects player sessions", async (t) => {
+  const context = await createServer();
+  t.after(context.close);
+  const start = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 1 }),
+  });
+  assert.equal(start.response.status, 201);
+  const sessionId = start.body.session.id;
+  const actionsPath = `/api/player/sessions/${sessionId}/actions`;
+
+  const unavailable = await request(context, actionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["booster:undo"] }),
+  });
+  assert.equal(unavailable.response.status, 400);
+  assert.equal(context.sessions[0].actions.length, 0);
+
+  context.wallets.set(userIds[0], {
+    boosterInventory: {
+      undo: 1,
+      shield: 0,
+      extra_moves: 0,
+      hint: 0,
+      freeze: 0,
+    },
+  });
+  const used = await request(context, actionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right", "booster:undo"] }),
+  });
+  assert.equal(used.response.status, 200);
+  assert.equal(used.body.session.moves, 0);
+  assert.deepEqual(used.body.session.actions, ["right", "booster:undo"]);
+  assert.equal(context.wallets.get(userIds[0]).boosterInventory.undo, 0);
+
+  const replay = await request(context, actionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right", "booster:undo"] }),
+  });
+  assert.equal(replay.response.status, 200);
+  assert.equal(context.wallets.get(userIds[0]).boosterInventory.undo, 0);
+
+  const otherPlayer = await request(context, actionsPath, {
+    userId: userIds[1],
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right"] }),
+  });
+  assert.equal(otherPlayer.response.status, 404);
+
+  context.wallets.get(userIds[0]).boosterInventory.shield = 1;
+  for (const status of ["completed", "failed"]) {
+    context.sessions[0].status = status;
+    const terminalActivation = await request(context, actionsPath, {
+      method: "PUT",
+      body: JSON.stringify({ actions: ["right", "booster:undo", "booster:shield"] }),
+    });
+    assert.equal(terminalActivation.response.status, 409);
+    assert.equal(context.wallets.get(userIds[0]).boosterInventory.shield, 1);
+  }
+});
+
+test("replays teleport actions deterministically on the server", async (t) => {
+  const teleportLevel = {
+    ...levels[0],
+    board: {
+      rows: 5,
+      columns: 7,
+      worm: [
+        { row: 3, column: 0 },
+        { row: 3, column: 1 },
+      ],
+      apples: [{ row: 2, column: 5 }],
+      obstacles: [],
+      portal: { row: 3, column: 5 },
+      teleports: [{
+        id: "portal-pair-1",
+        entry: { row: 3, column: 2 },
+        exit: { row: 1, column: 5 },
+      }],
+    },
+  };
+  const context = await createServer([teleportLevel, ...levels.slice(1)]);
+  t.after(context.close);
+  const started = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 1 }),
+  });
+  assert.equal(started.response.status, 201);
+
+  const sessionActionsPath = `/api/player/sessions/${started.body.session.id}/actions`;
+  const forgedState = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({
+      actions: ["right"],
+      teleportDestination: { row: 1, column: 5 },
+      teleportStatus: "used",
+    }),
+  });
+  assert.equal(forgedState.response.status, 400);
+
+  const actions = ["right", "down", "down"];
+  const firstSave = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions }),
+  });
+  const duplicateSave = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions }),
+  });
+  assert.equal(firstSave.response.status, 200);
+  assert.equal(firstSave.body.session.status, "completed");
+  assert.equal(firstSave.body.session.moves, 3);
+  assert.equal(firstSave.body.session.score, 100);
+  assert.deepEqual(
+    {
+      status: duplicateSave.body.session.status,
+      moves: duplicateSave.body.session.moves,
+      score: duplicateSave.body.session.score,
+      actions: duplicateSave.body.session.actions,
+    },
+    {
+      status: firstSave.body.session.status,
+      moves: firstSave.body.session.moves,
+      score: firstSave.body.session.score,
+      actions: firstSave.body.session.actions,
+    },
+  );
+});
+
+test("replays moving obstacle positions on the server without client-supplied state", async (t) => {
+  const movingObstacleLevel = {
+    ...levels[0],
+    board: {
+      rows: 5,
+      columns: 7,
+      worm: [
+        { row: 2, column: 0 },
+        { row: 2, column: 1 },
+      ],
+      apples: [{ row: 4, column: 5 }],
+      obstacles: [],
+      portal: { row: 4, column: 6 },
+      movingObstacles: [{
+        id: "patroller",
+        path: [{ row: 0, column: 0 }, { row: 2, column: 2 }],
+      }],
+    },
+  };
+  const context = await createServer([movingObstacleLevel, ...levels.slice(1)]);
+  t.after(context.close);
+  const started = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 1 }),
+  });
+  assert.equal(started.response.status, 201);
+
+  const sessionActionsPath = `/api/player/sessions/${started.body.session.id}/actions`;
+  const forgedState = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({
+      actions: ["right"],
+      movingObstaclePositions: [{ row: 2, column: 1 }],
+      status: "completed",
+    }),
+  });
+  assert.equal(forgedState.response.status, 400);
+
+  const firstSave = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right"] }),
+  });
+  const duplicateSave = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right"] }),
+  });
+  assert.equal(firstSave.response.status, 200);
+  assert.equal(firstSave.body.session.status, "failed");
+  assert.equal(firstSave.body.session.moves, 1);
+  assert.deepEqual(
+    {
+      status: duplicateSave.body.session.status,
+      moves: duplicateSave.body.session.moves,
+      actions: duplicateSave.body.session.actions,
+    },
+    {
+      status: firstSave.body.session.status,
+      moves: firstSave.body.session.moves,
+      actions: firstSave.body.session.actions,
+    },
+  );
+});
+
+test("replays ice sliding on the server from direction-only actions", async (t) => {
+  const iceLevel = {
+    ...levels[0],
+    board: {
+      rows: 5,
+      columns: 7,
+      worm: [{ row: 2, column: 0 }, { row: 2, column: 1 }],
+      apples: [{ row: 2, column: 5 }],
+      obstacles: [],
+      portal: { row: 2, column: 6 },
+      iceTiles: [
+        { row: 2, column: 2 },
+        { row: 2, column: 3 },
+        { row: 2, column: 4 },
+      ],
+    },
+  };
+  const context = await createServer([iceLevel, ...levels.slice(1)]);
+  t.after(context.close);
+  const started = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 1 }),
+  });
+  assert.equal(started.response.status, 201);
+
+  const sessionActionsPath = `/api/player/sessions/${started.body.session.id}/actions`;
+  const forgedState = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({
+      actions: ["right"],
+      iceSlideSteps: 4,
+      positions: [{ row: 2, column: 5 }],
+      status: "completed",
+    }),
+  });
+  assert.equal(forgedState.response.status, 400);
+
+  const actions = ["right", "right"];
+  const firstSave = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions }),
+  });
+  const duplicateSave = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions }),
+  });
+  assert.equal(firstSave.response.status, 200);
+  assert.equal(firstSave.body.session.status, "completed");
+  assert.equal(firstSave.body.session.moves, 2);
+  assert.equal(firstSave.body.session.score, 100);
+  assert.deepEqual(
+    {
+      status: duplicateSave.body.session.status,
+      moves: duplicateSave.body.session.moves,
+      score: duplicateSave.body.session.score,
+      actions: duplicateSave.body.session.actions,
+    },
+    {
+      status: firstSave.body.session.status,
+      moves: firstSave.body.session.moves,
+      score: firstSave.body.session.score,
+      actions: firstSave.body.session.actions,
+    },
+  );
+});
+
+test("enforces a level move limit during authoritative server replay", async (t) => {
+  const challengeLevel = {
+    ...levels[0],
+    moveLimit: 2,
+    board: {
+      rows: 5,
+      columns: 6,
+      worm: [{ row: 2, column: 0 }, { row: 2, column: 1 }],
+      apples: [{ row: 2, column: 3 }],
+      obstacles: [],
+      portal: { row: 2, column: 4 },
+    },
+  };
+  const context = await createServer([challengeLevel, ...levels.slice(1)]);
+  t.after(context.close);
+  const started = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 1 }),
+  });
+  assert.equal(started.response.status, 201);
+
+  const sessionActionsPath = `/api/player/sessions/${started.body.session.id}/actions`;
+  const forgedState = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({
+      actions: ["right"],
+      score: 100,
+      status: "completed",
+    }),
+  });
+  assert.equal(forgedState.response.status, 400);
+
+  const failed = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right", "right"] }),
+  });
+  assert.equal(failed.response.status, 200);
+  assert.equal(failed.body.session.status, "failed");
+  assert.equal(failed.body.session.moves, 2);
+  assert.equal(failed.body.session.score, 100);
+
+  const additionalMove = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions: ["right", "right", "right"] }),
+  });
+  assert.equal(additionalMove.response.status, 409);
+});
+
+test("starts and saves levels 51 and 100 while rejecting level 101", async (t) => {
+  const context = await createServer();
+  t.after(context.close);
+  for (let levelNumber = 1; levelNumber < TOTAL_LEVELS; levelNumber += 1) {
+    const progress = {
+      user: userIds[0],
+      levelNumber,
+      status: "completed",
+      bestScore: 100,
+      bestMoves: 1,
+      stars: 3,
+      completedAt: new Date(),
+    };
+    progress.save = async () => progress;
+    context.progressRecords.push(progress);
+  }
+
+  for (const levelNumber of [51, TOTAL_LEVELS]) {
+    const started = await request(context, "/api/player/sessions", {
+      method: "POST",
+      body: JSON.stringify({ levelNumber }),
+    });
+    assert.equal(started.response.status, 201);
+    assert.equal(started.body.session.levelNumber, levelNumber);
+
+    const saved = await request(
+      context,
+      `/api/player/sessions/${started.body.session.id}/actions`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ actions: routeActions(levels[levelNumber - 1]) }),
+      },
+    );
+    assert.equal(saved.response.status, 200);
+    assert.equal(saved.body.session.status, "completed");
+    assert.equal(saved.body.session.levelNumber, levelNumber);
+  }
+
+  const beyondMaximum = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: TOTAL_LEVELS + 1 }),
+  });
+  assert.equal(beyondMaximum.response.status, 400);
+});
+
 test("saves and replays player actions once, validates completion, and unlocks the next level", async (t) => {
   const context = await createServer();
   t.after(context.close);
@@ -273,6 +795,77 @@ test("saves and replays player actions once, validates completion, and unlocks t
       { levelNumber: 2, status: "unlocked", bestScore: 0, bestMoves: null, stars: 0 },
     ],
   );
+});
+
+test("retries completed-session progress finalization after a progress save failure", async (t) => {
+  const context = await createServer();
+  t.after(context.close);
+  context.wallets.set(userIds[0], {
+    balance: 37,
+    boosterInventory: {
+      undo: 0,
+      shield: 1,
+      extra_moves: 0,
+      hint: 0,
+      freeze: 0,
+    },
+  });
+
+  const started = await request(context, "/api/player/sessions", {
+    method: "POST",
+    body: JSON.stringify({ levelNumber: 1 }),
+  });
+  assert.equal(started.response.status, 201);
+
+  const levelProgress = context.progressRecords.find((record) =>
+    record.user === userIds[0] && record.levelNumber === 1);
+  let completionSaveAttempts = 0;
+  levelProgress.save = async () => {
+    if (levelProgress.status === "completed" && completionSaveAttempts === 0) {
+      completionSaveAttempts += 1;
+      Object.assign(levelProgress, {
+        status: "unlocked",
+        bestScore: 0,
+        bestMoves: undefined,
+        stars: 0,
+        completedAt: null,
+      });
+      throw new Error("Injected LevelProgress save failure.");
+    }
+    if (levelProgress.status === "completed") completionSaveAttempts += 1;
+    return levelProgress;
+  };
+
+  const actions = ["booster:shield", ...routeActions(levels[0])];
+  const sessionActionsPath = `/api/player/sessions/${started.body.session.id}/actions`;
+  const firstAttempt = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions }),
+  });
+  assert.equal(firstAttempt.response.status, 500);
+  assert.equal(context.sessions[0].status, "completed");
+  assert.equal(levelProgress.status, "unlocked");
+  assert.equal(completionSaveAttempts, 1);
+  assert.equal(context.wallets.get(userIds[0]).boosterInventory.shield, 0);
+  assert.equal(context.wallets.get(userIds[0]).balance, 37);
+
+  const retry = await request(context, sessionActionsPath, {
+    method: "PUT",
+    body: JSON.stringify({ actions }),
+  });
+  assert.equal(retry.response.status, 200);
+  assert.equal(retry.body.session.status, "completed");
+  assert.equal(retry.body.progress.unlockedLevel, 2);
+  assert.equal(levelProgress.status, "completed");
+  assert.equal(levelProgress.bestScore, 100);
+  assert.equal(levelProgress.bestMoves, levels[0].parMoves);
+  assert.equal(context.progressRecords.find((record) => record.levelNumber === 2).status, "unlocked");
+  assert.equal(completionSaveAttempts, 2);
+  assert.equal(context.achievements.length, 12);
+  assert.equal(context.achievements.find((item) => item.key === "first-level").progress, 1);
+  assert.ok(context.achievements.find((item) => item.key === "first-level").unlockedAt);
+  assert.equal(context.wallets.get(userIds[0]).boosterInventory.shield, 0);
+  assert.equal(context.wallets.get(userIds[0]).balance, 37);
 });
 
 test("returns only the caller's history and prevents access to another player's session", async (t) => {

@@ -7,6 +7,7 @@ import {
   PageHeading,
 } from "../components/ScreenStates.jsx";
 import { getVerifiedGameplayEffect } from "../game/rewardEffects.js";
+import { levels } from "../data/levelData.js";
 
 function ProfilePage({ token }) {
   const loadProfile = React.useCallback(() => api.getProfile(token), [token]);
@@ -30,7 +31,7 @@ function ProfilePage({ token }) {
             <div className="profile-stat-list">
               <article className="stat-card stat-card--green"><span>Completed levels</span><strong>{profile.stats.completedLevels}</strong><i>▦</i></article>
               <article className="stat-card stat-card--yellow"><span>Total score</span><strong>{profile.stats.totalScore}</strong><i>✦</i></article>
-              <article className="stat-card stat-card--lavender"><span>Stars earned</span><strong>{profile.stats.totalStars} / 150</strong><i>★</i></article>
+              <article className="stat-card stat-card--lavender"><span>Stars earned</span><strong>{profile.stats.totalStars} / {levels.length * 3}</strong><i>★</i></article>
             </div>
           </section>
         )}

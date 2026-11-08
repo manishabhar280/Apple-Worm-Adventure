@@ -10,15 +10,18 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:unit": "node --test src/auth/routeAccess.test.js src/services/apiRequest.test.js src/game/sessionSaveQueue.test.js src/game/walletActions.test.js src/game/rewardEffects.test.js src/game/gameLogic.test.js src/game/levelProgression.test.js src/data/levelData.test.js",
+    "test:unit": "node --test ../shared/worldConfig.test.js ../shared/levelFeatures.test.js src/auth/routeAccess.test.js src/services/apiRequest.test.js src/game/sessionSaveQueue.test.js src/game/walletActions.test.js src/game/rewardEffects.test.js src/game/gameLogic.test.js src/game/levelProgression.test.js src/game/gameAudio.test.js src/game/boardIndexes.test.js src/game/swipeGesture.test.js src/game/dailyChallenge.test.js src/game/wormSkins.test.js src/data/levelData.test.js src/data/guestProgress.test.js src/data/guestSettings.test.js src/game/guestAchievements.test.js src/game/guestStatistics.test.js",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
     "@playwright/test": "^1.64.1",
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^6.0.7"

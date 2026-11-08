@@ -1,37 +1,35 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "./components/AppShell.jsx";
-import DashboardPage from "./pages/DashboardPage.jsx";
-import AuthPage from "./pages/AuthPage.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
 import LevelsPage from "./pages/LevelsPage.jsx";
 import GameScreen from "./pages/GameScreen.jsx";
-import AdminPage from "./pages/AdminPage.jsx";
 import {
   AchievementsPage,
-  HistoryPage,
-  LeaderboardPage,
-  ProfilePage,
-  WalletPage,
-} from "./pages/DataPages.jsx";
+  SettingsPage,
+  StatisticsPage,
+  DailyChallengePage,
+  WormCollectionPage,
+} from "./pages/GuestPages.jsx";
+import { getGuestAchievements } from "./game/guestAchievements.js";
+import { getGuestStatistics } from "./game/guestStatistics.js";
 import { levels } from "./data/levelData.js";
-import { recordLevelCompletion } from "./game/levelProgression.js";
+import {
+  completeGuestLevelWithFeatures,
+  readGuestProgress,
+  saveGuestProgress,
+} from "./data/guestProgress.js";
+import {
+  applyGuestSettings,
+  readGuestSettings,
+  saveGuestSettings,
+  vibrateForMove,
+} from "./data/guestSettings.js";
 import { useGame } from "./game/useGame.js";
-import { api } from "./services/api.js";
+import { gameAudio } from "./game/gameAudio.js";
 import { getRouteAccess } from "./auth/routeAccess.js";
-import { ErrorState, LoadingState } from "./components/ScreenStates.jsx";
-import { createSessionSaveQueue } from "./game/sessionSaveQueue.js";
-
-function recordsFromProgress(progress) {
-  return Object.fromEntries(
-    progress.levels
-      .filter((record) => record.status === "completed")
-      .map((record) => [record.levelNumber, {
-        score: record.bestScore,
-        moves: record.bestMoves,
-        stars: record.stars,
-      }]),
-  );
-}
+import { getLevelFeatureBoard } from "../../shared/levelFeatures.js";
+import { getDailyChallenge, toUtcDateKey } from "./game/dailyChallenge.js";
+import { getEquippedWormSkin, isWormSkinUnlocked } from "./game/wormSkins.js";
 
 function useNavigation() {
   const [path, setPath] = useState(window.location.pathname);
@@ -43,7 +41,6 @@ function useNavigation() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
-
   const navigate = useCallback((nextPath) => {
     if (window.location.pathname !== nextPath) {
       window.history.pushState({}, "", nextPath);
@@ -57,353 +54,344 @@ function useNavigation() {
 
 function App() {
   const { path, navigate } = useNavigation();
-  const [player, setPlayer] = useState(null);
-  const [authStatus, setAuthStatus] = useState("loading");
-  const [authError, setAuthError] = useState("");
-  const [selectedLevelNumber, setSelectedLevelNumber] = useState(1);
-  const [unlockedLevel, setUnlockedLevel] = useState(1);
-  const [records, setRecords] = useState({});
-  const [activeSession, setActiveSession] = useState(null);
-  const [persistenceError, setPersistenceError] = useState("");
-  const [saveFailed, setSaveFailed] = useState(false);
-  const [pendingRewardHint, setPendingRewardHint] = useState(null);
-  const sessionGeneration = useRef(0);
-  const authGeneration = useRef(0);
-  const saveQueue = useRef(null);
-  const selectedLevel = levels[selectedLevelNumber - 1];
-  const { game, actions, move, restart, pause, loadLevel, loadProgress } = useGame(levels[0].board);
-  const routeAccess = getRouteAccess(path, authStatus, player?.role);
-
-  if (!saveQueue.current) {
-    saveQueue.current = createSessionSaveQueue({
-      save: (sessionId, sessionActions, options) =>
-        api.saveGameActions(undefined, sessionId, sessionActions, options),
-      onSaved: (result, job) => {
-        if (sessionGeneration.current !== job.generation) return;
-        setUnlockedLevel((current) => Math.max(current, result.progress.unlockedLevel));
-        setRecords(recordsFromProgress(result.progress));
-        setActiveSession(result.session.status === "in_progress" ? result.session : null);
-        setPersistenceError("");
-        setSaveFailed(false);
-      },
-      onError: (error, job) => {
-        if (sessionGeneration.current !== job.generation) return;
-        setPersistenceError(error.message);
-        setSaveFailed(true);
-      },
+  const [initialLoad] = useState(() => {
+    const progressLoad = readGuestProgress();
+    const settingsLoad = readGuestSettings(undefined, {
+      legacyReducedMotion: progressLoad.progress.settings.reducedMotion,
+      prefersReducedMotion: globalThis.matchMedia?.(
+        "(prefers-reduced-motion: reduce)",
+      ).matches || false,
     });
-  }
+    return { progressLoad, settingsLoad };
+  });
+  const [guestProgress, setGuestProgress] = useState(initialLoad.progressLoad.progress);
+  const [guestSettings, setGuestSettings] = useState(initialLoad.settingsLoad.settings);
+  const [canSaveProgress, setCanSaveProgress] = useState(initialLoad.progressLoad.canSave);
+  const [canSaveSettings, setCanSaveSettings] = useState(initialLoad.settingsLoad.canSave);
+  const [progressError, setProgressError] = useState(initialLoad.progressLoad.error);
+  const [settingsError, setSettingsError] = useState(initialLoad.settingsLoad.error);
+  const [progressSaveFailed, setProgressSaveFailed] = useState(false);
+  const [settingsSaveFailed, setSettingsSaveFailed] = useState(false);
+  const progressSaveFailureRef = useRef(false);
+  const settingsSaveFailureRef = useRef(false);
+  const [achievementToast, setAchievementToast] = useState(null);
+  const achievementToastTimer = useRef(null);
+  const [systemReducedMotion, setSystemReducedMotion] = useState(() =>
+    globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches || false,
+  );
+  const effectiveReducedMotion = guestSettings.reducedMotion || systemReducedMotion;
+  const [selectedLevelNumber, setSelectedLevelNumber] = useState(
+    initialLoad.progressLoad.progress.activeGame?.levelNumber || 1,
+  );
+  const [activeChallengeDate, setActiveChallengeDate] = useState(
+    initialLoad.progressLoad.progress.activeGame?.challengeDate ?? null,
+  );
+  const selectedLevel = useMemo(() => {
+    const level = levels[selectedLevelNumber - 1];
+    return { ...level, board: getLevelFeatureBoard(level) };
+  }, [selectedLevelNumber]);
+  const {
+    game,
+    actions,
+    move,
+    restart,
+    pause,
+    loadLevel,
+    loadProgress,
+  } = useGame(selectedLevel.board, selectedLevel.moveLimit);
+  const unlockedLevel = guestProgress.unlockedLevel;
+  const records = guestProgress.records;
+  const achievements = getGuestAchievements(
+    records,
+    guestProgress.achievements,
+    guestProgress.engagement,
+  );
+  const statistics = getGuestStatistics(guestProgress);
 
-  const flushActiveSession = useCallback(async () => {
-    if (authStatus !== "authenticated" || !activeSession?.id) return true;
-    const sameActions =
-      activeSession.actions?.length === actions.length &&
-      activeSession.actions?.every((action, index) => action === actions[index]);
-    if (sameActions) return true;
-    saveQueue.current.enqueue(activeSession.id, actions, sessionGeneration.current);
-    return saveQueue.current.flush();
-  }, [actions, activeSession, authStatus]);
-
-  const checkSession = useCallback(async () => {
-    const generation = ++authGeneration.current;
-    setAuthStatus("loading");
-    setAuthError("");
-    try {
-      const { user } = await api.getCurrentUser();
-      if (authGeneration.current !== generation) return;
-      setPlayer({
-        id: user.id,
-        name: user.displayName,
-        email: user.email,
-        avatar: user.avatar,
-        role: user.role,
-      });
-      setAuthStatus("authenticated");
-    } catch (error) {
-      if (authGeneration.current !== generation) return;
-      setPlayer(null);
-      if (error.status === 401) {
-        setAuthStatus("anonymous");
-      } else {
-        setAuthError(error.message);
-        setAuthStatus("error");
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    void checkSession();
-  }, [checkSession]);
-
-  useEffect(() => {
-    function handleSessionExpired() {
-      authGeneration.current += 1;
-      setPlayer(null);
-      setAuthStatus("anonymous");
-      setAuthError("");
-    }
-    window.addEventListener("auth:session-expired", handleSessionExpired);
-    return () => window.removeEventListener("auth:session-expired", handleSessionExpired);
-  }, []);
-
+  const routeAccess = getRouteAccess(path);
   useEffect(() => {
     if (routeAccess.type === "redirect") {
       navigate(routeAccess.destination);
     }
   }, [navigate, routeAccess.destination, routeAccess.type]);
 
-  const handleSelectLevel = useCallback(
-    async (level, openGame = false) => {
-      if (!level || level.number > unlockedLevel) {
-        return;
-      }
-      if (!(await flushActiveSession())) return;
-      setSelectedLevelNumber(level.number);
-      loadLevel(level.board);
-      setActiveSession(null);
-      const generation = ++sessionGeneration.current;
-      setPersistenceError("");
-      if (openGame || path === "/game") {
-        navigate("/game");
-      }
-      if (authStatus === "authenticated") {
-        api.startGameSession(undefined, level.number)
-          .then(({ session }) => {
-            if (sessionGeneration.current === generation) setActiveSession(session);
-          })
-          .catch((error) => {
-            if (sessionGeneration.current === generation) setPersistenceError(error.message);
-          });
-      }
-    },
-    [authStatus, flushActiveSession, loadLevel, navigate, path, unlockedLevel],
-  );
+  useEffect(() => {
+    const savedGame = initialLoad.progressLoad.progress.activeGame;
+    if (!savedGame) return;
+    const level = levels[savedGame.levelNumber - 1];
+    loadProgress(getLevelFeatureBoard(level), savedGame.actions, level.moveLimit);
+    if (window.location.pathname === "/") navigate("/game");
+  }, [initialLoad, loadProgress, navigate]);
 
-  const playFirstLevel = useCallback(() => {
-    handleSelectLevel(levels[0], true);
-  }, [handleSelectLevel]);
-
-  const handleResume = useCallback(async (resume) => {
-    if (activeSession?.id === resume.sessionId) {
-      navigate("/game");
-      return;
-    }
-    if (!(await flushActiveSession())) return;
-    const level = levels[resume.levelNumber - 1];
-    if (!level) {
-      setPersistenceError("Saved progress references an unavailable level.");
-      return;
-    }
-    setSelectedLevelNumber(level.number);
-    setUnlockedLevel((current) => Math.max(current, resume.levelNumber));
-    setPersistenceError("");
-    if (resume.sessionId) {
-      sessionGeneration.current += 1;
-      loadProgress(level.board, resume.actions);
-      setActiveSession({
-        id: resume.sessionId,
-        levelNumber: resume.levelNumber,
-        actions: resume.actions,
-      });
-      navigate("/game");
-      return;
-    }
-    setSelectedLevelNumber(level.number);
-    loadLevel(level.board);
-    setActiveSession(null);
-    const generation = ++sessionGeneration.current;
-    navigate("/game");
-    if (authStatus === "authenticated") {
-      api.startGameSession(undefined, level.number)
-        .then(({ session }) => {
-          if (sessionGeneration.current === generation) setActiveSession(session);
-        })
-        .catch((error) => {
-          if (sessionGeneration.current === generation) setPersistenceError(error.message);
-        });
-    }
-  }, [activeSession, authStatus, flushActiveSession, loadLevel, loadProgress, navigate]);
-
-  const handleRestart = useCallback(async () => {
-    if (!(await flushActiveSession())) return;
-    restart();
-    setActiveSession(null);
-    const generation = ++sessionGeneration.current;
-    if (authStatus === "authenticated") {
-      api.startGameSession(undefined, selectedLevelNumber)
-        .then(({ session }) => {
-          if (sessionGeneration.current === generation) setActiveSession(session);
-        })
-        .catch((error) => {
-          if (sessionGeneration.current === generation) setPersistenceError(error.message);
-        });
-    }
-  }, [authStatus, flushActiveSession, restart, selectedLevelNumber]);
-
-  const handleAuthenticated = useCallback((user) => {
-    authGeneration.current += 1;
-    setPlayer({
-      id: user.id,
-      name: user.displayName,
-      email: user.email,
-      avatar: user.avatar,
-      role: user.role,
-    });
-    setAuthError("");
-    setAuthStatus("authenticated");
-  }, []);
-
-  const handleLogout = useCallback(async () => {
-    authGeneration.current += 1;
-    setPersistenceError("");
+  useEffect(() => {
+    if (!canSaveProgress || progressSaveFailureRef.current) return;
     try {
-      await api.logout();
-      setPlayer(null);
-      setAuthStatus("anonymous");
-      setActiveSession(null);
-      sessionGeneration.current += 1;
-      navigate("/");
+      saveGuestProgress(guestProgress);
+      setProgressError("");
+      setProgressSaveFailed(false);
+      progressSaveFailureRef.current = false;
     } catch (error) {
-      if (error.status !== 401) {
-        setPersistenceError(error.message);
-      }
+      progressSaveFailureRef.current = true;
+      setCanSaveProgress(false);
+      setProgressSaveFailed(true);
+      setProgressError(error.message);
     }
-  }, [navigate]);
-
-  const purchaseHint = useCallback((requestId) => api.purchaseHint(requestId), []);
-  const receiveRewardHint = useCallback((direction) => {
-    setPendingRewardHint({ id: crypto.randomUUID(), direction });
-    navigate("/game");
-  }, [navigate]);
-  const consumeRewardHint = useCallback((hintId) => {
-    setPendingRewardHint((current) => current?.id === hintId ? null : current);
-  }, []);
+  }, [canSaveProgress, guestProgress]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated") {
-      return undefined;
+    if (!canSaveSettings || settingsSaveFailureRef.current) return;
+    try {
+      saveGuestSettings(guestSettings);
+      setSettingsError("");
+      setSettingsSaveFailed(false);
+      settingsSaveFailureRef.current = false;
+    } catch (error) {
+      settingsSaveFailureRef.current = true;
+      setCanSaveSettings(false);
+      setSettingsSaveFailed(true);
+      setSettingsError(error.message);
     }
-    let current = true;
-    const generation = sessionGeneration.current;
-    api.getProgress().then((progress) => {
-      if (!current || sessionGeneration.current !== generation) return;
-      setUnlockedLevel(progress.unlockedLevel);
-      setRecords(recordsFromProgress(progress));
-      if (progress.activeSession) {
-        const resumeLevel = levels[progress.activeSession.levelNumber - 1];
-        if (!resumeLevel) {
-          setPersistenceError("Saved progress references an unavailable level.");
-          setActiveSession(null);
-          return;
-        }
-        setSelectedLevelNumber(resumeLevel.number);
-        loadProgress(resumeLevel.board, progress.activeSession.actions || []);
-      }
-      setActiveSession(progress.activeSession);
-    }).catch((error) => {
-      if (current) setPersistenceError(error.message);
+  }, [canSaveSettings, guestSettings]);
+
+  useEffect(() => {
+    applyGuestSettings({
+      ...guestSettings,
+      reducedMotion: effectiveReducedMotion,
     });
-    return () => {
-      current = false;
+  }, [effectiveReducedMotion, guestSettings]);
+
+  useEffect(() => {
+    gameAudio.setSoundEffectsEnabled(guestSettings.soundEffects);
+    gameAudio.setBackgroundMusicEnabled(
+      guestSettings.backgroundMusic && path === "/game",
+    );
+  }, [guestSettings.backgroundMusic, guestSettings.soundEffects, path]);
+
+  useEffect(() => {
+    if (path !== "/game" || !guestSettings.backgroundMusic) return undefined;
+    const startMusic = (event) => {
+      if (event.isTrusted) gameAudio.startMusicFromInteraction();
     };
-  }, [authStatus, loadProgress]);
+    const stopMusicWhenHidden = () => {
+      if (document.visibilityState === "hidden") gameAudio.pauseMusic();
+    };
+    window.addEventListener("pointerdown", startMusic, true);
+    window.addEventListener("keydown", startMusic, true);
+    document.addEventListener("visibilitychange", stopMusicWhenHidden);
+    return () => {
+      window.removeEventListener("pointerdown", startMusic, true);
+      window.removeEventListener("keydown", startMusic, true);
+      document.removeEventListener("visibilitychange", stopMusicWhenHidden);
+      gameAudio.pauseMusic();
+    };
+  }, [guestSettings.backgroundMusic, path]);
+
+  useEffect(() => () => gameAudio.dispose(), []);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !activeSession?.id) {
-      return undefined;
-    }
-    const generation = sessionGeneration.current;
-    const sameActions =
-      activeSession.actions?.length === actions.length &&
-      activeSession.actions?.every((action, index) => action === actions[index]);
-    if (sameActions) {
-      return undefined;
-    }
-
-    saveQueue.current.enqueue(activeSession.id, actions, generation);
-  }, [authStatus, activeSession, actions]);
-
-  const latestSaveRef = useRef(null);
-  latestSaveRef.current = { authStatus, activeSession, actions, generation: sessionGeneration.current };
-
-  useEffect(() => {
-    function flushOnPageHide() {
-      const snapshot = latestSaveRef.current;
-      if (snapshot.authStatus !== "authenticated" || !snapshot.activeSession?.id) return;
-      const savedActions = snapshot.activeSession.actions || [];
-      const sameActions = savedActions.length === snapshot.actions.length &&
-        savedActions.every((action, index) => action === snapshot.actions[index]);
-      if (!sameActions) {
-        saveQueue.current.flushForPageHide(
-          snapshot.activeSession.id,
-          snapshot.actions,
-          snapshot.generation,
-        );
-      }
-    }
-    window.addEventListener("pagehide", flushOnPageHide);
-    return () => window.removeEventListener("pagehide", flushOnPageHide);
+    const mediaQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mediaQuery) return undefined;
+    const handleChange = (event) => setSystemReducedMotion(event.matches);
+    mediaQuery.addEventListener?.("change", handleChange);
+    return () => mediaQuery.removeEventListener?.("change", handleChange);
   }, []);
 
   useEffect(() => {
-    if (game.status !== "won") {
+    if (path !== "/game") return;
+    if (game.status === "won" || game.status === "lost") {
+      setGuestProgress((current) =>
+        current.activeGame?.levelNumber === selectedLevelNumber &&
+          current.activeGame.actions.length === actions.length
+          ? { ...current, activeGame: null }
+          : current);
       return;
     }
-    setRecords((previous) =>
-      recordLevelCompletion(previous, selectedLevel, game),
+    setGuestProgress((current) => {
+      const saved = current.activeGame;
+      if (
+        saved?.levelNumber === selectedLevelNumber &&
+        (saved.challengeDate ?? null) === activeChallengeDate &&
+        saved.actions.length === actions.length &&
+        saved.actions.every((action, index) => action === actions[index])
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        activeGame: {
+          levelNumber: selectedLevelNumber,
+          actions,
+          ...(activeChallengeDate ? { challengeDate: activeChallengeDate } : {}),
+        },
+      };
+    });
+  }, [actions, activeChallengeDate, game.status, path, selectedLevelNumber]);
+
+  useEffect(() => {
+    if (game.status !== "won") return;
+    const completedProgress = completeGuestLevelWithFeatures(
+      guestProgress,
+      selectedLevel,
+      game,
+      {
+        challengeDate: activeChallengeDate,
+        today: toUtcDateKey(),
+      },
     );
-    setUnlockedLevel((previous) =>
-      Math.max(previous, Math.min(levels.length, selectedLevel.number + 1)),
-    );
-  }, [game, selectedLevel]);
+    const newlyUnlocked = getGuestAchievements(
+      completedProgress.records,
+      completedProgress.achievements,
+      completedProgress.engagement,
+    ).filter((achievement) =>
+      achievement.unlockedAt &&
+      !guestProgress.achievements?.[achievement.id]?.unlockedAt);
+
+    if (newlyUnlocked.length > 0) {
+      if (achievementToastTimer.current !== null) {
+        window.clearTimeout(achievementToastTimer.current);
+      }
+      setAchievementToast({
+        ids: newlyUnlocked.map(({ id }) => id).join(","),
+        titles: newlyUnlocked.map(({ title }) => title),
+      });
+      achievementToastTimer.current = window.setTimeout(() => {
+        setAchievementToast(null);
+        achievementToastTimer.current = null;
+      }, 5200);
+    }
+    if (completedProgress !== guestProgress) {
+      setGuestProgress(completedProgress);
+    }
+    if (activeChallengeDate) setActiveChallengeDate(null);
+  }, [achievementToastTimer, activeChallengeDate, game, guestProgress, selectedLevel]);
+
+  useEffect(() => () => {
+    if (achievementToastTimer.current !== null) {
+      window.clearTimeout(achievementToastTimer.current);
+    }
+  }, []);
+
+  const handleSelectLevel = useCallback((level, openGame = false) => {
+    if (!level || level.number > guestProgress.unlockedLevel) return;
+    setActiveChallengeDate(null);
+    setSelectedLevelNumber(level.number);
+    loadLevel(getLevelFeatureBoard(level), level.moveLimit);
+    setGuestProgress((current) => ({
+      ...current,
+      activeGame: { levelNumber: level.number, actions: [] },
+    }));
+    if (openGame || path === "/game") navigate("/game");
+  }, [guestProgress.unlockedLevel, loadLevel, navigate, path]);
+
+  const playNow = useCallback(() => {
+    const savedGame = guestProgress.activeGame;
+    if (savedGame) {
+      const level = levels[savedGame.levelNumber - 1];
+      setActiveChallengeDate(savedGame.challengeDate ?? null);
+      setSelectedLevelNumber(level.number);
+      loadProgress(getLevelFeatureBoard(level), savedGame.actions, level.moveLimit);
+      navigate("/game");
+      return;
+    }
+    handleSelectLevel(levels[guestProgress.unlockedLevel - 1], true);
+  }, [guestProgress.activeGame, guestProgress.unlockedLevel, handleSelectLevel, loadProgress, navigate]);
+
+  const handleRestart = useCallback(() => {
+    restart();
+    setGuestProgress((current) => ({
+      ...current,
+      activeGame: {
+        levelNumber: selectedLevelNumber,
+        actions: [],
+        ...(activeChallengeDate ? { challengeDate: activeChallengeDate } : {}),
+      },
+    }));
+  }, [activeChallengeDate, restart, selectedLevelNumber]);
+
+  const handleSettingChange = useCallback((setting, enabled) => {
+    setGuestSettings((current) => ({ ...current, [setting]: enabled }));
+  }, []);
+  const startDailyChallenge = useCallback(() => {
+    const challenge = getDailyChallenge();
+    if (guestProgress.activeGame) {
+      playNow();
+      return;
+    }
+    const level = levels[challenge.levelNumber - 1];
+    setActiveChallengeDate(challenge.date);
+    setSelectedLevelNumber(level.number);
+    loadLevel(getLevelFeatureBoard(level), level.moveLimit);
+    setGuestProgress((current) => ({
+      ...current,
+      activeGame: {
+        levelNumber: level.number,
+        actions: [],
+        challengeDate: challenge.date,
+      },
+    }));
+    navigate("/game");
+  }, [guestProgress.activeGame, loadLevel, navigate, playNow]);
+  const equipWormSkin = useCallback((skinId) => {
+    if (!isWormSkinUnlocked(skinId, records)) return;
+    setGuestProgress((current) => ({
+      ...current,
+      engagement: {
+        ...(current.engagement ?? {}),
+        selectedSkin: skinId,
+      },
+    }));
+  }, [records]);
+  const retryGuestSaves = useCallback(() => {
+    if (progressSaveFailed) {
+      progressSaveFailureRef.current = false;
+      setCanSaveProgress(true);
+    }
+    if (settingsSaveFailed) {
+      settingsSaveFailureRef.current = false;
+      setCanSaveSettings(true);
+    }
+  }, [progressSaveFailed, settingsSaveFailed]);
+  const handleMove = useCallback((direction) => {
+    const result = move(direction);
+    if (!result.accepted) return false;
+    vibrateForMove(guestSettings.vibration);
+    if (result.goldenAppleCollected) gameAudio.playEffect("goldenApple");
+    else if (result.treasureCollected) gameAudio.playEffect("treasure");
+    else if (!result.completed) gameAudio.playEffect(result.appleCollected ? "apple" : "move");
+    return true;
+  }, [guestSettings.vibration, move]);
+  const handleGameAudioEffect = useCallback((effect) => {
+    gameAudio.playEffect(effect);
+  }, []);
 
   let screen;
-  if (authStatus === "error" && routeAccess.type === "wait") {
-    screen = (
-      <main className="content-page">
-        <ErrorState message={authError} onRetry={() => void checkSession()} />
-      </main>
-    );
-  } else if (routeAccess.type === "wait") {
-    screen = (
-      <main className="content-page">
-        <LoadingState label="Checking your session..." />
-      </main>
-    );
-  } else if (routeAccess.type === "redirect") {
-    screen = (
-      <main className="content-page">
-        <LoadingState label="Redirecting..." />
-      </main>
-    );
-  } else switch (path) {
+  switch (path) {
     case "/":
-      screen = <LandingPage navigate={navigate} playFirstLevel={playFirstLevel} />;
-      break;
-    case "/login":
       screen = (
-        <AuthPage
-          mode="login"
+        <LandingPage
           navigate={navigate}
-          onAuthenticated={handleAuthenticated}
+          playNow={playNow}
+          achievements={achievements}
+          engagement={guestProgress.engagement}
         />
       );
       break;
-    case "/register":
+    case "/daily":
       screen = (
-        <AuthPage
-          mode="register"
-          navigate={navigate}
-          onAuthenticated={handleAuthenticated}
+        <DailyChallengePage
+          progress={guestProgress}
+          onStart={startDailyChallenge}
+          onResume={playNow}
         />
       );
       break;
-    case "/dashboard":
+    case "/collection":
       screen = (
-        <DashboardPage
-          navigate={navigate}
-          player={player}
-          onResume={handleResume}
+        <WormCollectionPage
+          records={records}
+          selectedSkin={guestProgress.engagement?.selectedSkin ?? "classic"}
+          engagement={guestProgress.engagement}
+          onSelect={equipWormSkin}
         />
       );
       break;
@@ -412,9 +400,14 @@ function App() {
         <LevelsPage
           unlockedLevel={unlockedLevel}
           records={records}
-          selectedLevel={selectedLevelNumber}
-          onSelect={(level) => handleSelectLevel(level, true)}
-          navigate={navigate}
+          activeGame={guestProgress.activeGame}
+          onSelect={(level) => {
+            if (guestProgress.activeGame?.levelNumber === level.number) {
+              playNow();
+              return;
+            }
+            handleSelectLevel(level, true);
+          }}
         />
       );
       break;
@@ -426,53 +419,112 @@ function App() {
           game={game}
           unlockedLevel={unlockedLevel}
           records={records}
-          onMove={move}
+          onMove={handleMove}
           onRestart={handleRestart}
           onPause={pause}
-          onPurchaseHint={authStatus === "authenticated" ? purchaseHint : undefined}
-          rewardHint={pendingRewardHint}
-          onRewardHintConsumed={consumeRewardHint}
+          onAudioEffect={handleGameAudioEffect}
           onSelectLevel={(level) => handleSelectLevel(level)}
           navigate={navigate}
+          challengeDate={activeChallengeDate}
+          wormSkin={getEquippedWormSkin(
+            guestProgress.engagement?.selectedSkin,
+            records,
+          )}
         />
       );
       break;
-    case "/profile":
-      screen = <ProfilePage />;
-      break;
-    case "/history":
-      screen = <HistoryPage />;
-      break;
-    case "/leaderboard":
-      screen = <LeaderboardPage />;
-      break;
     case "/achievements":
-      screen = <AchievementsPage />;
+      screen = (
+        <AchievementsPage
+          records={records}
+          unlocks={guestProgress.achievements}
+        />
+      );
       break;
-    case "/wallet":
-      screen = <WalletPage onRewardHint={receiveRewardHint} />;
+    case "/statistics":
+      screen = <StatisticsPage statistics={statistics} navigate={navigate} />;
       break;
-    case "/admin":
-      screen = player?.role === "admin"
-        ? <AdminPage />
-        : <main className="content-page"><div className="content-card admin-access-denied"><h1>Admin access required</h1><p>This area is available only to administrator accounts.</p><button className="control-button control-button--primary" type="button" onClick={() => navigate("/dashboard")}>Return to dashboard</button></div></main>;
+    case "/settings":
+      screen = (
+        <SettingsPage
+          settings={guestSettings}
+          vibrationAvailable={typeof globalThis.navigator?.vibrate === "function"}
+          onSettingChange={handleSettingChange}
+        />
+      );
       break;
     default:
-      screen = <LandingPage navigate={navigate} />;
+      screen = (
+        <LandingPage
+          navigate={navigate}
+          playNow={playNow}
+          achievements={achievements}
+        />
+      );
   }
 
   return (
     <AppShell
       path={path}
       navigate={navigate}
-      player={player}
-      onLogout={handleLogout}
+      reducedMotion={effectiveReducedMotion}
+      darkMode={guestSettings.darkMode}
     >
-      {persistenceError && (
+      {achievementToast && (
+        <aside className="achievement-toast" role="status" aria-live="polite">
+          <span className="achievement-toast-icon" aria-hidden="true">🏅</span>
+          <span className="achievement-toast-copy">
+            <strong>{achievementToast.titles.length === 1
+              ? "Achievement unlocked"
+              : `${achievementToast.titles.length} achievements unlocked`}</strong>
+            <span>{achievementToast.titles.join(" · ")}</span>
+          </span>
+          <button
+            type="button"
+            className="achievement-toast-link"
+            onClick={() => navigate("/achievements")}
+          >
+            View
+          </button>
+          <button
+            type="button"
+            className="achievement-toast-dismiss"
+            aria-label="Dismiss achievement notification"
+            onClick={() => {
+              if (achievementToastTimer.current !== null) {
+                window.clearTimeout(achievementToastTimer.current);
+                achievementToastTimer.current = null;
+              }
+              setAchievementToast(null);
+            }}
+          >
+            ×
+          </button>
+        </aside>
+      )}
+      {(progressError || settingsError) && (
         <div className="persistence-alert" role="alert">
-          {persistenceError}
-          {saveFailed && <button className="retry-button" type="button" onClick={() => saveQueue.current.retry()}>Retry save</button>}
-          <button className="dismiss-button" type="button" onClick={() => setPersistenceError("")} aria-label="Dismiss error">×</button>
+          {[progressError, settingsError].filter(Boolean).join(" ")}
+          {(progressSaveFailed || settingsSaveFailed) && (
+            <button
+              className="retry-button"
+              type="button"
+              onClick={retryGuestSaves}
+            >
+              Retry save
+            </button>
+          )}
+          <button
+            className="dismiss-button"
+            type="button"
+            onClick={() => {
+              setProgressError("");
+              setSettingsError("");
+            }}
+            aria-label="Dismiss save warning"
+          >
+            ×
+          </button>
         </div>
       )}
       {screen}

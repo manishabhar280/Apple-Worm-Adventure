@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test src/config/environment.test.js src/models/models.test.js src/middleware/validateRequest.test.js src/middleware/errorHandler.test.js src/middleware/verifyRequestOrigin.test.js src/routes/healthRoutes.test.js src/routes/authRoutes.test.js src/routes/playerRoutes.test.js src/routes/achievementRoutes.test.js src/services/achievementService.test.js src/routes/adminRoutes.test.js src/routes/walletRoutes.test.js src/routes/rewardRoutes.test.js test/integration/mongoTestSupport.test.js test/integration/userJourney.integration.test.js test/integration/userIsolation.integration.test.js test/integration/concurrency.integration.test.js"
+    "test": "node --test ../shared/worldConfig.test.js ../shared/levelFeatures.test.js src/config/environment.test.js src/models/models.test.js src/middleware/validateRequest.test.js src/middleware/errorHandler.test.js src/middleware/verifyRequestOrigin.test.js src/routes/healthRoutes.test.js src/routes/authRoutes.test.js src/routes/playerRoutes.test.js src/routes/achievementRoutes.test.js src/services/achievementService.test.js src/routes/adminRoutes.test.js src/routes/walletRoutes.test.js src/routes/rewardRoutes.test.js test/integration/mongoTestSupport.test.js test/integration/userJourney.integration.test.js test/integration/userIsolation.integration.test.js test/integration/concurrency.integration.test.js test/integration/walletRollback.integration.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

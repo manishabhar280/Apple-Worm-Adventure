@@ -1,9 +1,14 @@
 import React from "react";
 
-function GameHeader({ level, score, moves }) {
+function GameHeader({ level, score, moves, navigate }) {
   return (
     <header className="game-header">
-      <a className="brand" href="/" aria-label="Apple Worm Adventure home">
+      <button
+        className="brand"
+        type="button"
+        onClick={() => navigate("/")}
+        aria-label="Apple Worm Adventure home"
+      >
         <span className="brand-icon" aria-hidden="true">
           🍏
         </span>
@@ -11,7 +16,7 @@ function GameHeader({ level, score, moves }) {
           <span className="brand-title">Apple Worm</span>
           <span className="brand-subtitle">ADVENTURE</span>
         </span>
-      </a>
+      </button>
 
       <div className="header-stats" aria-label="Current game stats">
         <div className="stat">

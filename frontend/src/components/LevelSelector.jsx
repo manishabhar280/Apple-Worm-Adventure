@@ -6,22 +6,38 @@ function LevelSelector({
   selectedLevel,
   records,
   onSelect,
+  title = "Choose a level",
 }) {
+  const availableCount = levels.filter(
+    (level) => level.number <= unlockedLevel,
+  ).length;
+  const completedCount = levels.filter((level) => records[level.number]).length;
+
   return (
     <section className="level-selector" aria-labelledby="level-selector-title">
       <div className="level-selector-heading">
-        <h3 id="level-selector-title">Choose a level</h3>
-        <span>{unlockedLevel} / {levels.length} unlocked</span>
+        <div>
+          <h3 id="level-selector-title">{title}</h3>
+          <p>{completedCount} completed · {availableCount} available · {levels.length} total</p>
+        </div>
+        <span>1–{levels.length}</span>
       </div>
-      <div className="level-grid">
+      <div className="level-grid" role="group" aria-label="Continuous level progression">
         {levels.map((level) => {
           const record = records[level.number];
           const unlocked = level.number <= unlockedLevel;
+          const selected = level.number === selectedLevel;
+          const stateLabel = record
+            ? `completed, ${record.stars} stars`
+            : unlocked
+              ? "unlocked"
+              : "locked";
           return (
             <button
               className={[
                 "level-select-button",
-                level.number === selectedLevel ? "level-select-button--selected" : "",
+                unlocked ? "level-select-button--unlocked" : "level-select-button--locked",
+                selected ? "level-select-button--selected" : "",
                 record ? "level-select-button--complete" : "",
               ]
                 .filter(Boolean)
@@ -30,19 +46,13 @@ function LevelSelector({
               key={level.number}
               disabled={!unlocked}
               onClick={() => onSelect(level)}
-              aria-label={[
-                `Level ${level.number}: ${level.name}`,
-                unlocked ? "" : "locked",
-                record ? `${record.stars} stars` : "",
-              ]
-                .filter(Boolean)
-                .join(", ")}
+              aria-label={`Level ${level.number}: ${level.name}, ${stateLabel}${selected ? ", currently selected" : ""}`}
               aria-current={level.number === selectedLevel ? "page" : undefined}
-              title={unlocked ? level.name : `Complete level ${level.number - 1} to unlock`}
+              title={unlocked ? `${level.name} · ${stateLabel}` : `Complete level ${level.number - 1} to unlock`}
             >
               <span>{String(level.number).padStart(2, "0")}</span>
-              <span className="level-select-stars" aria-hidden="true">
-                {record ? "★".repeat(record.stars) : unlocked ? "" : "·"}
+              <span className="level-select-state" aria-hidden="true">
+                {record ? "★".repeat(record.stars) : selected ? "NOW" : unlocked ? "OPEN" : "LOCK"}
               </span>
             </button>
           );

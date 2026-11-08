@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { levels } from "./levelData.js";
-import { createInitialGameState, moveGame } from "../game/gameLogic.js";
+import { DIFFICULTY_TIERS, levels, TOTAL_LEVELS } from "./levelData.js";
+import {
+  createInitialGameState,
+  moveGame,
+} from "../game/gameLogic.js";
 
-test("provides 50 levels with complete playable board definitions", () => {
-  assert.equal(levels.length, 50);
+test("provides the configured number of complete playable levels", () => {
+  assert.equal(TOTAL_LEVELS, 100);
+  assert.equal(levels.length, TOTAL_LEVELS);
 
   for (const [index, level] of levels.entries()) {
     const { rows, columns, worm, apples, obstacles, portal } = level.board;
@@ -13,6 +18,7 @@ test("provides 50 levels with complete playable board definitions", () => {
 
     assert.equal(level.number, index + 1);
     assert.ok(level.name);
+    assert.ok(DIFFICULTY_TIERS.includes(level.difficulty));
     assert.ok(rows >= 9 && columns >= 9);
     assert.ok(worm.length >= 1);
     assert.ok(apples.length >= 1);
@@ -23,11 +29,48 @@ test("provides 50 levels with complete playable board definitions", () => {
   }
 });
 
+test("preserves the generated definitions of levels 1 through 50", () => {
+  const legacyDefinitions = levels.slice(0, 50).map(
+    ({ number, name, description, objective, parMoves, board }) => ({
+      number,
+      name,
+      description,
+      objective,
+      parMoves,
+      board,
+    }),
+  );
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(legacyDefinitions))
+    .digest("hex");
+
+  assert.equal(
+    fingerprint,
+    "2ffd41ae372bbb278c3b49b7b70d8fc195c218d49126fb1bad40f205afd986bc",
+  );
+});
+
+test("preserves the exact fingerprint of all 100 generated levels", () => {
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(levels)).digest("hex"),
+    "7c4e35eefa63bab7a110f1aa32a31bc7d8ce08d40f92d801c241683f8064c27c",
+  );
+});
+
+test("assigns the five difficulty tiers progressively across 100 levels", () => {
+  for (let tierIndex = 0; tierIndex < DIFFICULTY_TIERS.length; tierIndex += 1) {
+    const firstLevel = levels[tierIndex * 20];
+    const lastLevel = levels[(tierIndex + 1) * 20 - 1];
+    assert.equal(firstLevel.difficulty, DIFFICULTY_TIERS[tierIndex]);
+    assert.equal(lastLevel.difficulty, DIFFICULTY_TIERS[tierIndex]);
+  }
+});
+
 test("increases board size, apple count, and obstacle count as levels advance", () => {
-  assert.ok(levels[49].board.rows > levels[0].board.rows);
-  assert.ok(levels[49].board.columns > levels[0].board.columns);
-  assert.ok(levels[49].board.apples.length > levels[0].board.apples.length);
-  assert.ok(levels[49].board.obstacles.length > levels[0].board.obstacles.length);
+  assert.ok(levels.at(-1).board.rows > levels[0].board.rows);
+  assert.ok(levels.at(-1).board.columns > levels[0].board.columns);
+  assert.ok(levels.at(-1).board.apples.length > levels[0].board.apples.length);
+  assert.ok(levels.at(-1).board.obstacles.length > levels[0].board.obstacles.length);
   assert.ok(
     levels.every(
       (level, index) =>
@@ -40,6 +83,9 @@ test("increases board size, apple count, and obstacle count as levels advance", 
 test("keeps every level's apples and portal on a clear connected route", () => {
   for (const level of levels) {
     const { board, parMoves } = level;
+    assert.equal(Object.hasOwn(board, "keys"), false);
+    assert.equal(Object.hasOwn(board, "gates"), false);
+    assert.equal(Object.hasOwn(createInitialGameState(board), "collectedKeyIds"), false);
     const route = [];
     for (let row = 0; row < board.rows; row += 2) {
       const from = route.length === 0 || route[route.length - 1].column === 0;
